@@ -349,7 +349,7 @@ async function loadAndPlay(idx) {
   if (document.getElementById('queue-panel').classList.contains('open')) renderQueue()
 
   if (audioCtx.state === 'suspended') audioCtx.resume()
-  audio.src = 'file:///' + song.path.replace(/\\/g, '/')
+  audio.src = encodeURI('file:///' + song.path.replace(/\\/g, '/'))
   audio.play().catch(console.error)
 }
 
