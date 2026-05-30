@@ -18,7 +18,6 @@ let repeat      = false
 let seeking     = false
 let lyricLines  = []
 let curLyric    = -1
-let spectrumColors = { dark: '#3D2A10', mid: '#C8A97E', light: '#FFE0AA' }
 
 // ── Audio (Web Audio API) ─────────────────────────────────────────────────────
 const audio    = document.getElementById('audio')
@@ -49,22 +48,6 @@ document.getElementById('btn-queue-close').addEventListener('click', () => close
 
 // ── Search ────────────────────────────────────────────────────────────────────
 document.getElementById('search').addEventListener('input', filterSongs)
-document.getElementById('search-artists').addEventListener('input', e => buildArtistList(e.target.value))
-
-// ── Nav tabs ──────────────────────────────────────────────────────────────────
-document.querySelectorAll('.nav-tab').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.nav-tab').forEach(b => b.classList.remove('active'))
-    btn.classList.add('active')
-    const tab = btn.dataset.tab
-    document.getElementById('view-songs').style.display   = tab === 'songs'   ? 'flex' : 'none'
-    document.getElementById('view-artists').style.display = tab === 'artists' ? 'flex' : 'none'
-    document.getElementById('view-folders').style.display = tab === 'folders' ? 'flex' : 'none'
-    if (tab === 'artists') buildArtistList()
-    if (tab === 'folders') buildFolderList()
-  })
-})
-document.getElementById('search-folders').addEventListener('input', e => buildFolderList(e.target.value))
 
 document.getElementById('filter-clear').addEventListener('click', () => {
   setFiltered([...allSongs])
@@ -100,11 +83,7 @@ function drawSpectrum() {
 
   analyser.getByteFrequencyData(fftData)
 
-  const grad = ctx2d.createLinearGradient(0, H, 0, 0)
-  grad.addColorStop(0,    spectrumColors.dark)
-  grad.addColorStop(0.45, spectrumColors.mid)
-  grad.addColorStop(1,    spectrumColors.light)
-  ctx2d.fillStyle = grad
+  ctx2d.fillStyle = '#1DB954'
 
   const gap = 2
   const bw  = (W - gap * (BAR_COUNT - 1)) / BAR_COUNT
@@ -436,8 +415,11 @@ async function loadAndPlay(idx) {
   renderList()
   vsScrollToIndex(idx)
 
-  document.getElementById('song-title').textContent  = song.title
-  document.getElementById('song-artist').textContent = song.artist || ''
+  document.getElementById('bar-song-title').textContent    = song.title
+  document.getElementById('bar-song-artist').textContent   = song.artist || ''
+  document.getElementById('song-title-lyrics').textContent  = song.title
+  document.getElementById('song-artist-lyrics').textContent = song.artist || ''
+  document.getElementById('song-album-lyrics').textContent  = song.album  || ''
   document.getElementById('t-cur').textContent = '0:00'
   document.getElementById('t-tot').textContent = fmtTime(song.duration)
   seekSlider.set(0)
@@ -462,77 +444,29 @@ async function loadAndPlay(idx) {
   audio.src = encodeURI('file:///' + song.path.replace(/\\/g, '/'))
   audio.play().catch(err => {
     console.error('Error al reproducir:', song.path, err.message)
-    document.getElementById('song-title').textContent  = '⚠ Error al reproducir'
-    document.getElementById('song-artist').textContent = song.path.split('\\').pop()
+    document.getElementById('bar-song-title').textContent    = '⚠ Error al reproducir'
+    document.getElementById('bar-song-artist').textContent   = song.path.split('\\').pop()
+    document.getElementById('song-title-lyrics').textContent  = '⚠ Error al reproducir'
+    document.getElementById('song-artist-lyrics').textContent = song.path.split('\\').pop()
   })
-}
-
-function extractColor(dataUrl, cb) {
-  const tmp = new Image()
-  tmp.onload = () => {
-    const size = 60
-    const c = document.createElement('canvas')
-    c.width = c.height = size
-    const cx = c.getContext('2d')
-    cx.drawImage(tmp, 0, 0, size, size)
-    const px = cx.getImageData(0, 0, size, size).data
-    let br = 200, bg = 169, bb = 126, best = -1
-    for (let i = 0; i < px.length; i += 4) {
-      const r = px[i], g = px[i+1], b = px[i+2]
-      const max = Math.max(r, g, b), min = Math.min(r, g, b)
-      if (max < 40 || max > 240) continue
-      const l = (max + min) / 510
-      const s = max === min ? 0 : (max - min) / (255 * (1 - Math.abs(2 * l - 1)))
-      const score = s * (1 - Math.abs(l - 0.58))
-      if (score > best) { best = score; br = r; bg = g; bb = b }
-    }
-    cb(br, bg, bb)
-  }
-  tmp.src = dataUrl
-}
-
-function applyAccent(r, g, b) {
-  const toHex = n => n.toString(16).padStart(2, '0')
-  const mid   = `#${toHex(r)}${toHex(g)}${toHex(b)}`
-  const dark  = `#${toHex(Math.round(r*.25))}${toHex(Math.round(g*.25))}${toHex(Math.round(b*.25))}`
-  const lr    = Math.min(255, r + 90), lg = Math.min(255, g + 90), lb = Math.min(255, b + 90)
-  const light = `#${toHex(lr)}${toHex(lg)}${toHex(lb)}`
-  document.documentElement.style.setProperty('--accent', mid)
-  document.documentElement.style.setProperty('--acc2', light)
-  document.documentElement.style.setProperty('--cur-glow', `rgba(${r},${g},${b},.35)`)
-  document.documentElement.style.setProperty('--cur-glow2', `rgba(${r},${g},${b},.12)`)
-  spectrumColors = { dark, mid, light }
-}
-
-function resetAccent() {
-  document.documentElement.style.setProperty('--accent', '#C8A97E')
-  document.documentElement.style.setProperty('--acc2',   '#FFD7A0')
-  spectrumColors = { dark: '#3D2A10', mid: '#C8A97E', light: '#FFE0AA' }
 }
 
 function setCover(dataUrl) {
   const img    = document.getElementById('cover-img')
+  const barImg = document.getElementById('bar-cover-img')
   const noIcon = document.getElementById('no-cover')
-  const glow   = document.getElementById('art-glow')
-
-  const bgBlur = document.getElementById('bg-blur')
+  const barNo  = document.getElementById('bar-no-cover')
 
   if (dataUrl) {
-    img.src = dataUrl
-    img.style.display = 'block'
+    img.src = dataUrl; img.style.display = 'block'
+    barImg.src = dataUrl; barImg.style.display = 'block'
     noIcon.style.display = 'none'
-    glow.style.backgroundImage = `url("${dataUrl}")`
-    glow.style.opacity = '0.45'
-    bgBlur.style.backgroundImage = `url("${dataUrl}")`
-    bgBlur.style.opacity = '1'
-    extractColor(dataUrl, (r, g, b) => applyAccent(r, g, b))
+    barNo.style.display  = 'none'
   } else {
-    img.src = ''
-    img.style.display = 'none'
+    img.src = ''; img.style.display = 'none'
+    barImg.src = ''; barImg.style.display = 'none'
     noIcon.style.display = 'flex'
-    glow.style.opacity = '0'
-    bgBlur.style.opacity = '0'
-    resetAccent()
+    barNo.style.display  = 'flex'
   }
 }
 
