@@ -302,28 +302,72 @@ vsList.addEventListener('scroll', () => {
 })
 
 async function scanLibrary() {
-  setLibCount('Escaneando…')
-  const paths = await api.scanMusic()
+  setLibCount('Cargando…')
+
+  const [cache, files] = await Promise.all([api.loadCache(), api.scanMusic()])
+  // cache = { version: 1, songs: { path → { title, artist, album, duration, mtime } } }
+  // files = [{ path, mtime }]
+
   const prevMap = new Map(allSongs.map(s => [s.path, s]))
-  allSongs = paths.map(p => prevMap.get(p) || {
-    path: p,
-    title: p.split('\\').pop().replace(/\.mp3$/i, '').replace(/^\d+\s*[-–.]\s*/, ''),
-    artist: '', cover: null, duration: 0, lyrics: ''
+  const pathSet = new Set(files.map(f => f.path))
+
+  // Remove deleted files from cache
+  for (const p of Object.keys(cache.songs)) {
+    if (!pathSet.has(p)) delete cache.songs[p]
+  }
+
+  // Build allSongs from cache instantly
+  allSongs = files.map(({ path: p, mtime }) => {
+    const cached = cache.songs[p]
+    if (cached && cached.mtime === mtime) {
+      return prevMap.get(p) || {
+        path: p, mtime,
+        title: cached.title, artist: cached.artist,
+        album: cached.album, duration: cached.duration,
+        cover: null, lyrics: ''
+      }
+    }
+    return prevMap.get(p) || {
+      path: p, mtime,
+      title: p.split('\\').pop().replace(/\.mp3$/i, '').replace(/^\d+\s*[-–.]\s*/, ''),
+      artist: '', album: '', duration: 0, cover: null, lyrics: ''
+    }
   })
+
   applyFilter()
   renderList()
   setLibCount(`${allSongs.length} canciones`)
 
-  for (let i = 0; i < paths.length; i++) {
-    const meta = await api.readMeta(paths[i])
-    Object.assign(allSongs[i], meta)
-    const fi = filtered.indexOf(allSongs[i])
-    if (fi >= 0) scheduleListUpdate(fi)
-    if (allSongs[i] === currentSong) {
-      setCover(meta.cover)
-      buildLyrics(meta.lyrics)
-    }
+  // Only read new/modified MP3s, 8 at a time in parallel
+  const songMap  = new Map(allSongs.map(s => [s.path, s]))
+  const uncached = files.filter(({ path: p, mtime }) => {
+    const c = cache.songs[p]
+    return !c || c.mtime !== mtime
+  })
+
+  const BATCH = 8
+  for (let i = 0; i < uncached.length; i += BATCH) {
+    await Promise.all(
+      uncached.slice(i, i + BATCH).map(async ({ path: p, mtime }) => {
+        const meta = await api.readMeta(p)
+        const song = songMap.get(p)
+        if (!song) return
+        Object.assign(song, meta, { mtime, metaLoaded: true })
+        cache.songs[p] = {
+          title: meta.title, artist: meta.artist,
+          album: meta.album, duration: meta.duration, mtime
+        }
+        const fi = filtered.indexOf(song)
+        if (fi >= 0) scheduleListUpdate(fi)
+        if (song === currentSong) {
+          setCover(meta.cover)
+          buildLyrics(meta.lyrics)
+        }
+      })
+    )
   }
+
+  await api.saveCache(cache)
 
   _artistsCache = null
   setLibCount(`${allSongs.length} canciones`)
@@ -373,8 +417,19 @@ async function loadAndPlay(idx) {
   document.getElementById('t-tot').textContent = fmtTime(song.duration)
   seekSlider.set(0)
 
-  setCover(song.cover)
-  buildLyrics(song.lyrics)
+  if (song.metaLoaded) {
+    setCover(song.cover)
+    buildLyrics(song.lyrics)
+  } else {
+    setCover(null)
+    buildLyrics('')
+    api.readMeta(song.path).then(meta => {
+      if (song !== currentSong) return
+      Object.assign(song, meta, { metaLoaded: true })
+      setCover(meta.cover)
+      buildLyrics(meta.lyrics)
+    }).catch(() => {})
+  }
 
   if (document.getElementById('queue-panel').classList.contains('open')) renderQueue()
 

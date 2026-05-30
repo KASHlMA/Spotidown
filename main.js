@@ -89,13 +89,21 @@ ipcMain.handle('scan-music', async () => {
       const entries = await fs.promises.readdir(d, { withFileTypes: true })
       for (const entry of entries) {
         const full = path.join(d, entry.name)
-        if (entry.isDirectory()) await walk(full)
-        else if (entry.name.toLowerCase().endsWith('.mp3')) results.push(full)
+        if (entry.isDirectory()) {
+          await walk(full)
+        } else if (entry.name.toLowerCase().endsWith('.mp3')) {
+          try {
+            const stat = await fs.promises.stat(full)
+            results.push({ path: full, mtime: stat.mtimeMs })
+          } catch {
+            results.push({ path: full, mtime: 0 })
+          }
+        }
       }
     } catch (e) { console.error('scan-music walk error:', d, e.message) }
   }
   await walk(MUSIC_DIR)
-  results.sort()
+  results.sort((a, b) => a.path.localeCompare(b.path))
   return results
 })
 
