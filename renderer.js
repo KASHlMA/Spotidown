@@ -731,8 +731,6 @@ function esc(s) {
 // ── Shared helpers ────────────────────────────────────────────────────────────
 let _artistsCache = null
 
-const noPersonSvg = `<svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z"/></svg>`
-
 function deferImgs(queue) {
   let i = 0
   function batch() {
@@ -764,41 +762,6 @@ function getFolders() {
   return [...map.values()].sort((a, b) => a.name.localeCompare(b.name))
 }
 
-function buildFolderList(query = '') {
-  const ul     = document.getElementById('folder-list')
-  ul.innerHTML = ''
-  const q       = (query || '').toLowerCase()
-  const folders = getFolders().filter(f => !q || f.name.toLowerCase().includes(q))
-  const frag    = document.createDocumentFragment()
-  const queue   = []
-
-  for (const folder of folders) {
-    const li = document.createElement('li')
-    li.className = 'artist-item'
-
-    const avatarDiv = document.createElement('div')
-    avatarDiv.className = 'artist-avatar'
-    avatarDiv.style.borderRadius = '6px'
-    if (folder.cover) {
-      const img = document.createElement('img')
-      img.alt = ''; img.style.cssText = 'width:100%;height:100%;object-fit:cover;border-radius:6px'
-      avatarDiv.appendChild(img)
-      queue.push([img, folder.cover])
-    } else {
-      avatarDiv.innerHTML = `<svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>`
-    }
-
-    const info = document.createElement('div')
-    info.innerHTML = `<div class="artist-name">${esc(folder.name)}</div><div class="artist-count">${folder.songs.length} canción${folder.songs.length !== 1 ? 'es' : ''}</div>`
-
-    li.appendChild(avatarDiv); li.appendChild(info)
-    li.addEventListener('click', () => { setFiltered(folder.songs); renderList(); switchToSongs(folder.name) })
-    frag.appendChild(li)
-  }
-  ul.appendChild(frag)
-  deferImgs(queue)
-}
-
 // ── Artists ───────────────────────────────────────────────────────────────────
 function getArtists() {
   if (_artistsCache) return _artistsCache
@@ -812,38 +775,6 @@ function getArtists() {
   }
   _artistsCache = [...map.values()].sort((a, b) => a.name.localeCompare(b.name))
   return _artistsCache
-}
-
-function buildArtistList(query = '') {
-  const ul    = document.getElementById('artist-list')
-  ul.innerHTML = ''
-  const q       = (query || '').toLowerCase()
-  const artists = getArtists().filter(a => !q || a.name.toLowerCase().includes(q))
-  const frag    = document.createDocumentFragment()
-  const queue   = []
-
-  for (const artist of artists) {
-    const li = document.createElement('li')
-    li.className = 'artist-item'
-
-    const avatarDiv = document.createElement('div')
-    avatarDiv.className = 'artist-avatar'
-    if (artist.cover) {
-      const img = document.createElement('img')
-      img.alt = ''; img.style.cssText = 'width:100%;height:100%;object-fit:cover;border-radius:50%'
-      avatarDiv.appendChild(img)
-      queue.push([img, artist.cover])
-    } else { avatarDiv.innerHTML = noPersonSvg }
-
-    const info = document.createElement('div')
-    info.innerHTML = `<div class="artist-name">${esc(artist.name)}</div><div class="artist-count">${artist.songs.length} canción${artist.songs.length !== 1 ? 'es' : ''}</div>`
-
-    li.appendChild(avatarDiv); li.appendChild(info)
-    li.addEventListener('click', () => { setFiltered(artist.songs); renderList(); switchToSongs(artist.name) })
-    frag.appendChild(li)
-  }
-  ul.appendChild(frag)
-  deferImgs(queue)
 }
 
 function buildHomeArtists() {
