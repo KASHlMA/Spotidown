@@ -73,6 +73,16 @@ function buildHomeRecents() {
       nt.className = 'recent-card-nothumb'
       nt.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg>'
       card.appendChild(nt)
+      if (!song.metaLoaded) {
+        api.readMeta(song.path).then(meta => {
+          if (!meta.cover) return
+          Object.assign(song, meta, { metaLoaded: true })
+          nt.remove()
+          const img = document.createElement('img')
+          img.className = 'recent-card-img'; img.src = meta.cover; img.alt = ''
+          card.insertBefore(img, card.firstChild)
+        }).catch(() => {})
+      }
     }
     const name = document.createElement('span')
     name.className = 'recent-card-name'; name.textContent = song.title
@@ -542,6 +552,30 @@ async function loadAndPlay(idx) {
   })
 }
 
+function extractColor(dataUrl, cb) {
+  const tmp = new Image()
+  tmp.onload = () => {
+    const size = 60
+    const c  = document.createElement('canvas')
+    c.width  = c.height = size
+    const cx = c.getContext('2d')
+    cx.drawImage(tmp, 0, 0, size, size)
+    const px = cx.getImageData(0, 0, size, size).data
+    let br = 30, bg = 30, bb = 30, best = -1
+    for (let i = 0; i < px.length; i += 4) {
+      const r = px[i], g = px[i+1], b = px[i+2]
+      const max = Math.max(r, g, b), min = Math.min(r, g, b)
+      if (max < 40 || max > 240) continue
+      const l = (max + min) / 510
+      const s = max === min ? 0 : (max - min) / (255 * (1 - Math.abs(2 * l - 1)))
+      const score = s * (1 - Math.abs(l - 0.58))
+      if (score > best) { best = score; br = r; bg = g; bb = b }
+    }
+    cb(br, bg, bb)
+  }
+  tmp.src = dataUrl
+}
+
 function setCover(dataUrl) {
   const img    = document.getElementById('cover-img')
   const barImg = document.getElementById('bar-cover-img')
@@ -553,11 +587,16 @@ function setCover(dataUrl) {
     barImg.src = dataUrl; barImg.style.display = 'block'
     noIcon.style.display = 'none'
     barNo.style.display  = 'none'
+    extractColor(dataUrl, (r, g, b) => {
+      document.getElementById('view-lyrics').style.background =
+        `linear-gradient(rgb(${r},${g},${b}) 0%, #121212 50%)`
+    })
   } else {
     img.src = ''; img.style.display = 'none'
     barImg.src = ''; barImg.style.display = 'none'
     noIcon.style.display = 'flex'
     barNo.style.display  = 'flex'
+    document.getElementById('view-lyrics').style.background = ''
   }
 }
 
@@ -788,7 +827,20 @@ function buildHomeArtists() {
     if (artist.cover) {
       const img = document.createElement('img'); img.src = artist.cover; img.alt = ''
       avatar.appendChild(img)
-    } else { avatar.innerHTML = noPersonSvg }
+    } else {
+      avatar.innerHTML = noPersonSvg
+      const src = artist.songs[0]
+      if (src) {
+        api.readMeta(src.path).then(meta => {
+          if (!meta.cover) return
+          Object.assign(src, meta, { metaLoaded: true })
+          artist.cover = meta.cover
+          avatar.innerHTML = ''
+          const img = document.createElement('img'); img.src = meta.cover; img.alt = ''
+          avatar.appendChild(img)
+        }).catch(() => {})
+      }
+    }
     const nameEl = document.createElement('div'); nameEl.className = 'artist-hcard-name'; nameEl.textContent = artist.name
     const subEl  = document.createElement('div'); subEl.className  = 'artist-hcard-sub';  subEl.textContent  = `${artist.songs.length} canciones`
     card.appendChild(avatar); card.appendChild(nameEl); card.appendChild(subEl)
@@ -809,7 +861,20 @@ function buildHomeAlbums() {
     if (folder.cover) {
       const img = document.createElement('img'); img.src = folder.cover; img.alt = ''
       thumb.appendChild(img)
-    } else { thumb.innerHTML = folderSvg }
+    } else {
+      thumb.innerHTML = folderSvg
+      const src = folder.songs[0]
+      if (src) {
+        api.readMeta(src.path).then(meta => {
+          if (!meta.cover) return
+          Object.assign(src, meta, { metaLoaded: true })
+          folder.cover = meta.cover
+          thumb.innerHTML = ''
+          const img = document.createElement('img'); img.src = meta.cover; img.alt = ''
+          thumb.appendChild(img)
+        }).catch(() => {})
+      }
+    }
     const nameEl = document.createElement('div'); nameEl.className = 'album-hcard-name'; nameEl.textContent = folder.name
     const subEl  = document.createElement('div'); subEl.className  = 'album-hcard-sub';  subEl.textContent  = `${folder.songs.length} canciones`
     card.appendChild(thumb); card.appendChild(nameEl); card.appendChild(subEl)
