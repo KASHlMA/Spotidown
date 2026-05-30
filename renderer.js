@@ -18,6 +18,20 @@ let repeat      = false
 let seeking     = false
 let lyricLines  = []
 let curLyric    = -1
+let currentView  = 'home'
+let previousView = 'home'
+
+function showView(name) {
+  document.getElementById('view-home').style.display    = name === 'home'    ? 'flex' : 'none'
+  document.getElementById('view-library').style.display = name === 'library' ? 'flex' : 'none'
+  document.getElementById('view-lyrics').style.display  = name === 'lyrics'  ? 'flex' : 'none'
+  document.querySelectorAll('.nav-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.view === (name === 'lyrics' ? previousView : name))
+  )
+  document.getElementById('btn-lyrics').classList.toggle('active', name === 'lyrics')
+  if (name !== 'lyrics') previousView = name
+  currentView = name
+}
 
 // ── Audio (Web Audio API) ─────────────────────────────────────────────────────
 const audio    = document.getElementById('audio')
@@ -45,6 +59,16 @@ document.getElementById('btn-shuffle').addEventListener('click', toggleShuffle)
 document.getElementById('btn-repeat').addEventListener('click',  toggleRepeat)
 document.getElementById('btn-queue').addEventListener('click',   toggleQueue)
 document.getElementById('btn-queue-close').addEventListener('click', () => closeQueue())
+
+// ── Sidebar nav + lyrics toggle ───────────────────────────────────────────────
+document.querySelectorAll('.nav-btn').forEach(btn => {
+  btn.addEventListener('click', () => showView(btn.dataset.view))
+})
+
+document.getElementById('btn-lyrics').addEventListener('click', () => {
+  if (currentView === 'lyrics') showView(previousView)
+  else showView('lyrics')
+})
 
 // ── Search ────────────────────────────────────────────────────────────────────
 document.getElementById('search').addEventListener('input', filterSongs)
@@ -655,11 +679,7 @@ function deferImgs(queue) {
 function switchToSongs(label) {
   document.getElementById('filter-label').textContent = label
   document.getElementById('filter-bar').style.display = 'flex'
-  document.querySelectorAll('.nav-tab').forEach(b => b.classList.remove('active'))
-  document.querySelector('[data-tab="songs"]').classList.add('active')
-  document.getElementById('view-artists').style.display = 'none'
-  document.getElementById('view-folders').style.display = 'none'
-  document.getElementById('view-songs').style.display   = 'flex'
+  showView('library')
 }
 
 // ── Folders ───────────────────────────────────────────────────────────────────
