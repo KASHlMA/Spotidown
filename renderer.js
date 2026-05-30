@@ -216,27 +216,90 @@ function setPlayIcon(isPlay) {
 }
 
 // ── Library ───────────────────────────────────────────────────────────────────
-const pendingUpdates = new Set()
-let rafPending = false
+// ── Virtual Scroll ────────────────────────────────────────────────────────────
+const ROW_HEIGHT = 52
+const OVERSCAN   = 3
+
+const vsList      = document.getElementById('song-list')
+const vsSpacerTop = document.createElement('div')
+const vsSpacerBot = document.createElement('div')
+vsList.appendChild(vsSpacerTop)
+vsList.appendChild(vsSpacerBot)
+
+let vsStart        = 0
+let vsEnd          = 0
+let vsRafId        = null
+let vsUpdatePending = false
+
+function vsBuffer() {
+  return Math.ceil((vsList.clientHeight || 500) / ROW_HEIGHT) + OVERSCAN * 2
+}
+
+function vsCalc() {
+  const start = Math.max(0, Math.floor(vsList.scrollTop / ROW_HEIGHT) - OVERSCAN)
+  const end   = Math.min(filtered.length, start + vsBuffer())
+  return { start, end }
+}
+
+function vsUpdateRow(li, i) {
+  const s = filtered[i]
+  li.dataset.idx = i
+  li.className   = s === currentSong ? 'active' : ''
+  li.querySelector('.li-title').textContent  = s.title  || ''
+  li.querySelector('.li-artist').textContent = s.artist || ''
+  const img = li.querySelector('.li-thumb img')
+  if (s.cover) { img.src = s.cover }
+  else { img.removeAttribute('src') }
+  li.onclick = () => loadAndPlay(i)
+}
+
+function vsMakeLi() {
+  const li = document.createElement('li')
+  li.innerHTML = '<div class="li-thumb"><img alt=""/></div>' +
+                 '<div class="li-text"><div class="li-title"></div><div class="li-artist"></div></div>'
+  return li
+}
+
+function renderList() {
+  const { start, end } = vsCalc()
+  const count    = end - start
+  const existing = [...vsList.querySelectorAll('li')]
+
+  while (existing.length < count) {
+    const li = vsMakeLi()
+    vsList.insertBefore(li, vsSpacerBot)
+    existing.push(li)
+  }
+  while (existing.length > count) existing.pop().remove()
+
+  vsSpacerTop.style.height = (start * ROW_HEIGHT) + 'px'
+  vsSpacerBot.style.height = (Math.max(0, filtered.length - end) * ROW_HEIGHT) + 'px'
+
+  existing.forEach((li, j) => vsUpdateRow(li, start + j))
+
+  vsStart = start
+  vsEnd   = end
+  vsRafId = null
+}
+
+function vsScrollToIndex(i) {
+  const top = i * ROW_HEIGHT
+  const bot = top + ROW_HEIGHT
+  if (vsList.scrollTop > top) vsList.scrollTop = top
+  else if (vsList.scrollTop + vsList.clientHeight < bot) vsList.scrollTop = bot - vsList.clientHeight
+}
 
 function scheduleListUpdate(fi) {
-  pendingUpdates.add(fi)
-  if (rafPending) return
-  rafPending = true
-  requestAnimationFrame(() => {
-    rafPending = false
-    const lis = document.querySelectorAll('#song-list li')
-    for (const idx of pendingUpdates) {
-      const li = lis[idx]; if (!li) continue
-      const s  = filtered[idx]
-      li.querySelector('.li-title').textContent  = s.title
-      li.querySelector('.li-artist').textContent = s.artist
-      const img = li.querySelector('.li-thumb img')
-      if (img && s.cover && !img.getAttribute('src')) img.src = s.cover
-    }
-    pendingUpdates.clear()
-  })
+  if (fi < vsStart || fi >= vsEnd) return
+  if (vsUpdatePending) return
+  vsUpdatePending = true
+  requestAnimationFrame(() => { vsUpdatePending = false; renderList() })
 }
+
+vsList.addEventListener('scroll', () => {
+  if (vsRafId) return
+  vsRafId = requestAnimationFrame(renderList)
+})
 
 async function scanLibrary() {
   setLibCount('Escaneando…')
@@ -262,7 +325,6 @@ async function scanLibrary() {
     }
   }
 
-  // Reconstruir la vista activa ahora que tenemos toda la metadata
   _artistsCache = null
   setLibCount(`${allSongs.length} canciones`)
   const activeTab = document.querySelector('.nav-tab.active')?.dataset?.tab
@@ -274,38 +336,6 @@ function setFiltered(arr) {
   currentIdx = currentSong ? filtered.indexOf(currentSong) : -1
   if (shuffle) buildShuffleQueue()
 }
-
-function renderList() {
-  const ul    = document.getElementById('song-list')
-  ul.innerHTML = ''
-  const frag  = document.createDocumentFragment()
-  const queue = []
-
-  filtered.forEach((s, i) => {
-    const li = document.createElement('li')
-    if (s === currentSong) li.classList.add('active')
-
-    const thumbDiv = document.createElement('div')
-    thumbDiv.className = 'li-thumb'
-    const img = document.createElement('img')
-    img.alt = ''
-    thumbDiv.appendChild(img)
-    if (s.cover) queue.push([img, s.cover])
-
-    const textDiv = document.createElement('div')
-    textDiv.className = 'li-text'
-    textDiv.innerHTML = `<div class="li-title">${esc(s.title)}</div><div class="li-artist">${esc(s.artist)}</div>`
-
-    li.appendChild(thumbDiv); li.appendChild(textDiv)
-    li.addEventListener('click', () => loadAndPlay(i))
-    frag.appendChild(li)
-  })
-
-  ul.appendChild(frag)
-  deferImgs(queue)
-}
-
-function updateListItem(i) { scheduleListUpdate(i) }
 
 function applyFilter() {
   const q = document.getElementById('search').value.trim().toLowerCase()
@@ -334,8 +364,8 @@ async function loadAndPlay(idx) {
   }
   const song  = currentSong
 
-  document.querySelectorAll('#song-list li').forEach((li, i) =>
-    li.classList.toggle('active', filtered[i] === currentSong))
+  renderList()
+  vsScrollToIndex(idx)
 
   document.getElementById('song-title').textContent  = song.title
   document.getElementById('song-artist').textContent = song.artist || ''
