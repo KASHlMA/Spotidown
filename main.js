@@ -3,6 +3,7 @@ const path = require('path')
 const fs   = require('fs')
 
 const MUSIC_DIR = app.getPath('music')
+const CACHE_PATH = path.join(app.getPath('userData'), 'music-cache.json')
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -60,6 +61,24 @@ function watchMusicDir() {
 
 // ── IPC: devolver directorio de música al renderer ────────────────────────────
 ipcMain.handle('get-music-dir', () => MUSIC_DIR)
+
+// ── IPC: caché de metadata ────────────────────────────────────────────────────
+ipcMain.handle('load-cache', async () => {
+  try {
+    const data = await fs.promises.readFile(CACHE_PATH, 'utf8')
+    return JSON.parse(data)
+  } catch {
+    return { version: 1, songs: {} }
+  }
+})
+
+ipcMain.handle('save-cache', async (_, cache) => {
+  try {
+    await fs.promises.writeFile(CACHE_PATH, JSON.stringify(cache), 'utf8')
+  } catch (e) {
+    console.error('save-cache error:', e.message)
+  }
+})
 
 // ── IPC: escanear directorio de música ───────────────────────────────────────
 ipcMain.handle('scan-music', async () => {
