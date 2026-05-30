@@ -79,10 +79,9 @@ const fftData  = new Uint8Array(analyser.frequencyBinCount)
 const smoothed = new Float32Array(BAR_COUNT)
 
 let _cW = 0, _cH = 0
+let spectrumRafId = null
 
 function drawSpectrum() {
-  requestAnimationFrame(drawSpectrum)
-
   const W = canvas.offsetWidth
   const H = canvas.offsetHeight
   if (_cW !== W || _cH !== H) {
@@ -91,11 +90,16 @@ function drawSpectrum() {
   }
 
   ctx2d.clearRect(0, 0, W, H)
-  if (audio.paused) return
+
+  if (audio.paused) {
+    spectrumRafId = null
+    return
+  }
+
+  spectrumRafId = requestAnimationFrame(drawSpectrum)
 
   analyser.getByteFrequencyData(fftData)
 
-  // Un solo gradiente por frame para todos los bares
   const grad = ctx2d.createLinearGradient(0, H, 0, 0)
   grad.addColorStop(0,    spectrumColors.dark)
   grad.addColorStop(0.45, spectrumColors.mid)
@@ -125,7 +129,7 @@ function drawSpectrum() {
     ctx2d.fill()
   }
 }
-drawSpectrum()
+// Loop starts from audio 'play' event — not called here directly
 
 // ── Custom sliders ────────────────────────────────────────────────────────────
 function makeSlider(trackId, onDrag, onRelease) {
@@ -192,6 +196,8 @@ volSlider.set(1)
 gainNode.gain.value = 1.5
 
 // ── RAF loop (barra fluida a 60fps) ──────────────────────────────────────────
+let seekRafId = null
+
 function rafLoop() {
   if (!seeking && !audio.paused && !audio.ended) {
     const dur = getDur()
@@ -201,9 +207,13 @@ function rafLoop() {
       syncLyrics(audio.currentTime)
     }
   }
-  requestAnimationFrame(rafLoop)
+  if (!audio.paused && !audio.ended) {
+    seekRafId = requestAnimationFrame(rafLoop)
+  } else {
+    seekRafId = null
+  }
 }
-requestAnimationFrame(rafLoop)
+// Loop starts from audio 'play' event — not called here directly
 
 // ── Audio events ──────────────────────────────────────────────────────────────
 audio.addEventListener('loadedmetadata', () => {
@@ -211,7 +221,11 @@ audio.addEventListener('loadedmetadata', () => {
   document.getElementById('t-tot').textContent = fmtTime(dur)
 })
 audio.addEventListener('ended', () => { if (!repeat) nextSong() })
-audio.addEventListener('play',  () => setPlayIcon(false))
+audio.addEventListener('play',  () => {
+  setPlayIcon(false)
+  if (!spectrumRafId) drawSpectrum()
+  if (!seekRafId)     rafLoop()
+})
 audio.addEventListener('pause', () => setPlayIcon(true))
 
 function setPlayIcon(isPlay) {
