@@ -616,8 +616,7 @@ function parseLrc(text) {
     if (META_RE.test(t)) continue
     const m = LRC_RE.exec(t)
     if (!m) continue
-    const frac = m[3]
-    const ms   = parseInt(frac) * (frac.length === 2 ? 10 : 1)
+    const ms   = Math.round(parseFloat('0.' + m[3]) * 1000)
     const time = parseInt(m[1]) * 60 + parseInt(m[2]) + ms / 1000
     const lyric = m[4].trim()
     if (lyric) lines.push({ time, text: lyric, el: null })
