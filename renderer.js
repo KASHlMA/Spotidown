@@ -525,9 +525,16 @@ function nextSong() {
   if (shuffle) {
     if (!shuffleQueue.length) buildShuffleQueue()
     const next = shufflePos + 1
-    if (next < shuffleQueue.length) { shufflePos = next; loadAndPlay(shuffleQueue[next]) }
+    if (next >= shuffleQueue.length) {
+      buildShuffleQueue()
+      if (shuffleQueue.length) { shufflePos = 0; loadAndPlay(shuffleQueue[0]) }
+    } else {
+      shufflePos = next
+      loadAndPlay(shuffleQueue[next])
+    }
   } else {
-    loadAndPlay(currentIdx + 1)
+    const next = currentIdx + 1
+    if (next < filtered.length) loadAndPlay(next)
   }
 }
 
