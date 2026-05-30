@@ -1,3 +1,8 @@
+if (typeof api === 'undefined') {
+  document.body.innerHTML = '<div style="color:#fff;padding:2rem;font-family:sans-serif"><h2>Error de inicialización</h2><p>El bridge IPC no cargó. Reinicia la aplicación.</p></div>'
+  throw new Error('window.api no definida — preload.js falló')
+}
+
 // ── Config ────────────────────────────────────────────────────────────────────
 const BAR_COUNT = 55
 
