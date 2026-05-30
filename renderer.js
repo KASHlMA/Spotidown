@@ -441,7 +441,11 @@ async function loadAndPlay(idx) {
 
   if (audioCtx.state === 'suspended') audioCtx.resume()
   audio.src = encodeURI('file:///' + song.path.replace(/\\/g, '/'))
-  audio.play().catch(console.error)
+  audio.play().catch(err => {
+    console.error('Error al reproducir:', song.path, err.message)
+    document.getElementById('song-title').textContent  = '⚠ Error al reproducir'
+    document.getElementById('song-artist').textContent = song.path.split('\\').pop()
+  })
 }
 
 function extractColor(dataUrl, cb) {
