@@ -20,6 +20,73 @@ let lyricLines  = []
 let curLyric    = -1
 let currentView  = 'home'
 let previousView = 'home'
+let recentlyPlayed = []
+
+function addToRecents(song) {
+  recentlyPlayed = [song, ...recentlyPlayed.filter(s => s.path !== song.path)].slice(0, 20)
+  buildRecentsInSidebar()
+  if (currentView === 'home') buildHomeRecents()
+}
+
+function buildRecentsInSidebar() {
+  const ul = document.getElementById('recents-list')
+  ul.innerHTML = ''
+  const frag = document.createDocumentFragment()
+  recentlyPlayed.slice(0, 8).forEach(song => {
+    const li = document.createElement('li')
+    const thumb = document.createElement('div')
+    thumb.className = 'rl-thumb'
+    if (song.cover) {
+      const img = document.createElement('img'); img.src = song.cover; img.alt = ''
+      thumb.appendChild(img)
+    } else {
+      thumb.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg>'
+    }
+    const name = document.createElement('span')
+    name.className = 'rl-name'
+    name.textContent = song.title
+    li.appendChild(thumb); li.appendChild(name)
+    li.addEventListener('click', () => {
+      let idx = filtered.indexOf(song)
+      if (idx < 0) { setFiltered([...allSongs]); idx = allSongs.indexOf(song) }
+      if (idx >= 0) loadAndPlay(idx)
+    })
+    frag.appendChild(li)
+  })
+  ul.appendChild(frag)
+}
+
+function buildHomeRecents() {
+  const grid = document.getElementById('recents-grid')
+  grid.innerHTML = ''
+  const items = recentlyPlayed.length > 0 ? recentlyPlayed.slice(0, 6) : allSongs.slice(0, 6)
+  const frag  = document.createDocumentFragment()
+  items.forEach(song => {
+    const card = document.createElement('div')
+    card.className = 'recent-card'
+    if (song.cover) {
+      const img = document.createElement('img')
+      img.className = 'recent-card-img'; img.src = song.cover; img.alt = ''
+      card.appendChild(img)
+    } else {
+      const nt = document.createElement('div')
+      nt.className = 'recent-card-nothumb'
+      nt.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg>'
+      card.appendChild(nt)
+    }
+    const name = document.createElement('span')
+    name.className = 'recent-card-name'; name.textContent = song.title
+    card.appendChild(name)
+    card.addEventListener('click', () => {
+      const idx = filtered.indexOf(song) >= 0 ? filtered.indexOf(song) : (() => {
+        setFiltered([...allSongs]); return allSongs.indexOf(song)
+      })()
+      loadAndPlay(idx)
+    })
+    frag.appendChild(card)
+  })
+  grid.appendChild(frag)
+}
 
 function showView(name) {
   document.getElementById('view-home').style.display    = name === 'home'    ? 'flex' : 'none'
@@ -393,8 +460,7 @@ async function scanLibrary() {
 
   _artistsCache = null
   setLibCount(`${allSongs.length} canciones`)
-  const activeTab = document.querySelector('.nav-tab.active')?.dataset?.tab
-  if (activeTab === 'artists') buildArtistList()
+  if (currentView === 'home') buildHomeView()
 }
 
 function setFiltered(arr) {
@@ -435,6 +501,7 @@ async function loadAndPlay(idx) {
     if (pos >= 0) shufflePos = pos
   }
   const song  = currentSong
+  addToRecents(song)
 
   renderList()
   vsScrollToIndex(idx)
@@ -777,6 +844,58 @@ function buildArtistList(query = '') {
   }
   ul.appendChild(frag)
   deferImgs(queue)
+}
+
+function buildHomeArtists() {
+  const row = document.getElementById('home-artists')
+  row.innerHTML = ''
+  const frag = document.createDocumentFragment()
+  const noPersonSvg = '<svg viewBox="0 0 24 24" fill="currentColor" width="40" height="40"><path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z"/></svg>'
+  getArtists().slice(0, 10).forEach(artist => {
+    const card = document.createElement('div'); card.className = 'artist-hcard'
+    const avatar = document.createElement('div'); avatar.className = 'artist-hcard-avatar'
+    if (artist.cover) {
+      const img = document.createElement('img'); img.src = artist.cover; img.alt = ''
+      avatar.appendChild(img)
+    } else { avatar.innerHTML = noPersonSvg }
+    const nameEl = document.createElement('div'); nameEl.className = 'artist-hcard-name'; nameEl.textContent = artist.name
+    const subEl  = document.createElement('div'); subEl.className  = 'artist-hcard-sub';  subEl.textContent  = `${artist.songs.length} canciones`
+    card.appendChild(avatar); card.appendChild(nameEl); card.appendChild(subEl)
+    card.addEventListener('click', () => { setFiltered(artist.songs); renderList(); switchToSongs(artist.name) })
+    frag.appendChild(card)
+  })
+  row.appendChild(frag)
+}
+
+function buildHomeAlbums() {
+  const row = document.getElementById('home-albums')
+  row.innerHTML = ''
+  const frag = document.createDocumentFragment()
+  const folderSvg = '<svg viewBox="0 0 24 24" fill="currentColor" width="40" height="40"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>'
+  getFolders().slice(0, 10).forEach(folder => {
+    const card = document.createElement('div'); card.className = 'album-hcard'
+    const thumb = document.createElement('div'); thumb.className = 'album-hcard-thumb'
+    if (folder.cover) {
+      const img = document.createElement('img'); img.src = folder.cover; img.alt = ''
+      thumb.appendChild(img)
+    } else { thumb.innerHTML = folderSvg }
+    const nameEl = document.createElement('div'); nameEl.className = 'album-hcard-name'; nameEl.textContent = folder.name
+    const subEl  = document.createElement('div'); subEl.className  = 'album-hcard-sub';  subEl.textContent  = `${folder.songs.length} canciones`
+    card.appendChild(thumb); card.appendChild(nameEl); card.appendChild(subEl)
+    card.addEventListener('click', () => { setFiltered(folder.songs); renderList(); switchToSongs(folder.name) })
+    frag.appendChild(card)
+  })
+  row.appendChild(frag)
+}
+
+function buildHomeView() {
+  const h = new Date().getHours()
+  document.getElementById('home-greeting').textContent =
+    h >= 6 && h < 12 ? 'Buenos días' :
+    h >= 12 && h < 18 ? 'Buenas tardes' : 'Buenas noches'
+  buildHomeRecents()
+  buildHomeArtists()
+  buildHomeAlbums()
 }
 
 // ── Queue ─────────────────────────────────────────────────────────────────────
