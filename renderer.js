@@ -388,10 +388,16 @@ function applyFilter() {
     : [...allSongs])
 }
 
+let searchTimer = null
+
 function filterSongs() {
-  applyFilter()
-  document.getElementById('filter-bar').style.display = 'none'
-  renderList()
+  clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => {
+    applyFilter()
+    document.getElementById('filter-bar').style.display = 'none'
+    vsList.scrollTop = 0
+    renderList()
+  }, 300)
 }
 
 function setLibCount(t) { document.getElementById('lib-count').textContent = t }
