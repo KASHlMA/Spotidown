@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell } = require('electron')
+const { app, BrowserWindow, ipcMain, shell, nativeImage } = require('electron')
 const path = require('path')
 const fs   = require('fs')
 
@@ -7,10 +7,11 @@ const CACHE_PATH = path.join(app.getPath('userData'), 'music-cache.json')
 
 function createWindow() {
   const win = new BrowserWindow({
-    width: 1080, height: 700,
-    minWidth: 720, minHeight: 520,
+    width: 1280, height: 800,
+    minWidth: 800, minHeight: 560,
     frame: false,
-    backgroundColor: '#0A0A0A',
+    title: 'Spotidown',
+    backgroundColor: '#000000',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -107,6 +108,20 @@ ipcMain.handle('scan-music', async () => {
   return results
 })
 
+// Portadas reducidas a 400px en JPEG: una portada incrustada puede pesar varios MB
+// y se guarda en memoria para cada canción de la biblioteca
+function coverToDataUrl(pic) {
+  const buf = Buffer.from(pic.data)
+  try {
+    const img = nativeImage.createFromBuffer(buf)
+    if (!img.isEmpty()) {
+      const out = img.getSize().width > 400 ? img.resize({ width: 400, quality: 'good' }) : img
+      return 'data:image/jpeg;base64,' + out.toJPEG(85).toString('base64')
+    }
+  } catch {}
+  return `data:${pic.format};base64,${buf.toString('base64')}`
+}
+
 // ── IPC: leer metadata de un MP3 ─────────────────────────────────────────────
 ipcMain.handle('read-meta', async (_, filePath) => {
   try {
@@ -114,11 +129,7 @@ ipcMain.handle('read-meta', async (_, filePath) => {
     const meta = await parseFile(filePath, { duration: true, skipCovers: false })
     const tag  = meta.common
 
-    let coverBase64 = null
-    if (tag.picture && tag.picture.length > 0) {
-      const pic = tag.picture[0]
-      coverBase64 = `data:${pic.format};base64,${Buffer.from(pic.data).toString('base64')}`
-    }
+    const coverBase64 = tag.picture?.length ? coverToDataUrl(tag.picture[0]) : null
 
     // Buscar letras en múltiples lugares
     let lyrics = ''
@@ -134,7 +145,8 @@ ipcMain.handle('read-meta', async (_, filePath) => {
       for (const fmt of Object.keys(meta.native || {})) {
         const uslt = meta.native[fmt].find(t => t.id === 'USLT')
         if (uslt) {
-          lyrics = uslt.value?.text || uslt.value || ''
+          const v = uslt.value
+          lyrics = typeof v === 'string' ? v : (v?.text || '')
           break
         }
       }
@@ -146,7 +158,7 @@ ipcMain.handle('read-meta', async (_, filePath) => {
       album:    tag.album  || '',
       duration: meta.format.duration || 0,
       cover:    coverBase64,
-      lyrics,
+      lyrics: typeof lyrics === 'string' ? lyrics : '',
     }
   } catch (e) {
     console.error('read-meta ERROR:', filePath, e.message)

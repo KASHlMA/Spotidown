@@ -2,126 +2,189 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8"/>
-  <title>Music Player</title>
+  <title>Spotidown</title>
   <link rel="stylesheet" href="styles.css"/>
 </head>
 <body>
 
-  <div class="titlebar">
-    <span class="app-name">♫ Music</span>
-    <div class="win-btns">
-      <button id="btn-min">&#8211;</button>
-      <button id="btn-max">&#9633;</button>
-      <button id="btn-close" class="close">&#10005;</button>
+  <header class="topbar">
+    <div class="tb-left">
+      <span class="app-logo">
+        <span class="logo-dot"><svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg></span>
+        <span class="logo-text">Spotidown</span>
+      </span>
+      <button id="btn-back" class="tb-nav" title="Atrás" disabled>
+        <svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22"><path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+      </button>
+      <button id="btn-fwd" class="tb-nav" title="Adelante" disabled>
+        <svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22"><path d="M10 6 8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
+      </button>
     </div>
-  </div>
+
+    <div class="tb-center">
+      <button id="btn-home" class="tb-home active" title="Inicio">
+        <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
+      </button>
+      <label class="tb-search">
+        <svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22"><path d="M10.5 3a7.5 7.5 0 0 1 5.96 12.05l4.25 4.24-1.42 1.42-4.24-4.25A7.5 7.5 0 1 1 10.5 3zm0 2a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11z"/></svg>
+        <input id="search" type="text" placeholder="¿Qué quieres reproducir?" spellcheck="false"/>
+        <button id="search-clear" class="search-clear" title="Borrar" hidden>
+          <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </label>
+    </div>
+
+    <div class="win-btns">
+      <button id="btn-min" title="Minimizar">&#8211;</button>
+      <button id="btn-max" title="Maximizar">&#9633;</button>
+      <button id="btn-close" class="close" title="Cerrar">&#10005;</button>
+    </div>
+  </header>
 
   <div class="app-layout">
 
-    <nav class="sidebar">
-      <div class="nav-main">
-        <button class="nav-btn active" data-view="home">
-          <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
-          <span>Inicio</span>
-        </button>
-        <button class="nav-btn" data-view="library">
-          <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-1 9H9V9h10v2zm-4 4H9v-2h6v2zm4-8H9V5h10v2z"/></svg>
-          <span>Biblioteca</span>
-        </button>
+    <aside class="panel sidebar">
+      <div class="sb-header">
+        <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M20 2H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-2 5h-3v5.5a2.5 2.5 0 0 1-5 0 2.5 2.5 0 0 1 2.5-2.5c.57 0 1.08.19 1.5.51V5h4v2zM4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6z"/></svg>
+        <span>Tu biblioteca</span>
       </div>
-      <div class="nav-section">
-        <span class="nav-section-label">RECIENTES</span>
-        <ul id="recents-list"></ul>
+      <div class="sb-chips">
+        <button class="chip" data-filter="all">Todo</button>
+        <button class="chip" data-filter="artist">Artistas</button>
+        <button class="chip" data-filter="album">Álbumes</button>
       </div>
-    </nav>
+      <ul id="lib-list" class="lib-list"></ul>
+      <p id="lib-status" class="lib-status"></p>
+    </aside>
 
-    <main class="center">
+    <main class="panel main">
 
-      <div id="view-home" class="view">
-        <div class="home-scroll">
-          <h1 id="home-greeting">Buenas tardes</h1>
-          <div class="home-section" id="recents-section">
-            <h2 class="section-title">Escuchado recientemente</h2>
-            <div id="recents-grid" class="recents-grid"></div>
-          </div>
-          <div class="home-section" id="artists-section">
-            <h2 class="section-title">Tus artistas</h2>
-            <div id="home-artists" class="home-row"></div>
-          </div>
-          <div class="home-section" id="albums-section">
-            <h2 class="section-title">Tus álbumes</h2>
-            <div id="home-albums" class="home-row"></div>
+      <section id="view-home" class="view">
+        <div class="scroller" id="home-scroll">
+          <div class="home-bg" id="home-bg"></div>
+          <div class="home-content">
+            <h1 id="home-greeting">Hola</h1>
+            <div id="home-tiles" class="tiles"></div>
+            <section class="shelf">
+              <div class="shelf-head"><h2>Escuchado recientemente</h2></div>
+              <div id="home-recent-albums" class="shelf-row"></div>
+            </section>
+            <section class="shelf">
+              <div class="shelf-head"><h2>Tus artistas favoritos</h2></div>
+              <div id="home-artists" class="shelf-row"></div>
+            </section>
+            <section class="shelf">
+              <div class="shelf-head"><h2>Tus álbumes</h2></div>
+              <div id="home-albums" class="shelf-row"></div>
+            </section>
           </div>
         </div>
-      </div>
+      </section>
 
-      <div id="view-library" class="view" style="display:none">
-        <div class="library-top">
-          <div class="search-wrap">
-            <input id="search" type="text" placeholder="Buscar en tu biblioteca…"/>
+      <section id="view-collection" class="view" hidden>
+        <div class="col-sticky" id="col-sticky">
+          <button class="big-play small" id="col-sticky-play"></button>
+          <span class="col-sticky-title" id="col-sticky-title"></span>
+        </div>
+        <div class="scroller" id="col-scroll">
+          <div class="col-hero" id="col-hero">
+            <div class="col-cover" id="col-cover"></div>
+            <div class="col-info">
+              <span class="col-type" id="col-type"></span>
+              <h1 class="col-title" id="col-title"></h1>
+              <div class="col-meta" id="col-meta"></div>
+            </div>
           </div>
-          <div id="filter-bar" style="display:none">
-            <span id="filter-label"></span>
-            <button id="filter-clear">✕</button>
+          <div class="col-body">
+            <div class="col-actions" id="col-actions">
+              <button class="big-play" id="col-play" title="Reproducir"></button>
+              <button class="col-shuffle" id="col-shuffle" title="Aleatorio">
+                <svg viewBox="0 0 24 24" fill="currentColor" width="30" height="30"><path d="M10.59 9.17 5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/></svg>
+              </button>
+            </div>
+            <div class="track-head" id="track-head">
+              <span class="th-num">#</span>
+              <span>Título</span>
+              <span class="th-album">Álbum</span>
+              <span class="th-dur"><svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67V7z"/></svg></span>
+            </div>
+            <p class="empty-msg" id="col-empty"></p>
+            <ul id="song-list" class="track-list"></ul>
           </div>
         </div>
-        <ul id="song-list"></ul>
-        <p class="lib-count" id="lib-count"></p>
-      </div>
+      </section>
 
-      <div id="view-lyrics" class="view" style="display:none">
-        <div class="lyrics-area">
-          <div class="lyrics-scroll" id="lyrics-scroll">
-            <div class="lyrics-inner" id="lyrics-inner"></div>
-          </div>
+      <section id="view-lyrics" class="view" hidden>
+        <div class="scroller" id="lyrics-scroll">
+          <div class="lyrics-inner" id="lyrics-inner"></div>
         </div>
-        <div class="lyrics-nowplaying">
-          <div class="lnp-cover">
-            <img id="cover-img" alt="" style="display:none"/>
-            <span class="no-cover" id="no-cover">
-              <svg viewBox="0 0 24 24" fill="currentColor" width="48" height="48"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg>
-            </span>
-          </div>
-          <div id="song-title-lyrics" class="lnp-title">Sin canción</div>
-          <div id="song-artist-lyrics" class="lnp-artist"></div>
-          <div id="song-album-lyrics" class="lnp-album"></div>
-          <canvas id="spectrum" class="spectrum"></canvas>
-        </div>
-      </div>
+      </section>
 
     </main>
+
+    <aside class="panel rightpanel" id="right-panel" hidden>
+      <div class="rp-header">
+        <span id="rp-title"></span>
+        <button id="rp-close" class="rp-close" title="Cerrar">
+          <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </div>
+
+      <div id="rp-np" class="rp-body">
+        <div class="np-cover ph" id="np-cover"></div>
+        <div class="np-row">
+          <div class="np-text">
+            <div class="np-title link-plain" id="np-title">Nada sonando</div>
+            <div class="np-artist" id="np-artist"></div>
+          </div>
+          <button class="like-btn" id="np-like" title="Me gusta"></button>
+        </div>
+        <canvas id="spectrum" class="spectrum"></canvas>
+        <div class="np-card" id="np-next-card" hidden>
+          <div class="np-card-head">
+            <span>Siguiente en la cola</span>
+            <button id="np-open-queue">Abrir cola</button>
+          </div>
+          <ul id="np-next" class="mini-list"></ul>
+        </div>
+      </div>
+
+      <div id="rp-queue" class="rp-body" hidden>
+        <h3 class="q-section">Sonando ahora</h3>
+        <ul id="queue-now" class="mini-list"></ul>
+        <h3 class="q-section" id="queue-next-label">A continuación</h3>
+        <ul id="queue-list" class="mini-list"></ul>
+      </div>
+    </aside>
+
   </div>
 
   <footer class="player-bar">
     <div class="bar-left">
-      <div class="bar-thumb">
-        <img id="bar-cover-img" alt="" style="display:none"/>
-        <span id="bar-no-cover">
-          <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg>
-        </span>
-      </div>
+      <div class="bar-thumb ph" id="bar-cover" title="Mostrar vista Reproduciendo"></div>
       <div class="bar-info">
         <div class="bar-title" id="bar-song-title">Sin canción seleccionada</div>
         <div class="bar-artist" id="bar-song-artist"></div>
       </div>
+      <button class="like-btn" id="bar-like" title="Me gusta" hidden></button>
     </div>
 
     <div class="bar-center">
       <div class="bar-controls">
         <button id="btn-shuffle" class="bar-btn" title="Aleatorio">
-          <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/></svg>
+          <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M10.59 9.17 5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/></svg>
         </button>
-        <button id="btn-prev" class="bar-btn">
+        <button id="btn-prev" class="bar-btn" title="Anterior">
           <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M6 6h2v12H6zm3.5 6L20 6v12z"/></svg>
         </button>
-        <button id="btn-play" class="bar-btn bar-play-btn">
-          <svg id="icon-play" viewBox="0 0 24 24" fill="currentColor" width="22" height="22"><path d="M8 5v14l11-7z"/></svg>
+        <button id="btn-play" class="bar-btn bar-play-btn" title="Reproducir">
+          <svg id="icon-play" viewBox="0 0 24 24" fill="currentColor" width="18" height="18"></svg>
         </button>
-        <button id="btn-next" class="bar-btn">
+        <button id="btn-next" class="bar-btn" title="Siguiente">
           <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
         </button>
-        <button id="btn-repeat" class="bar-btn" title="Repetir">
-          <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/></svg>
+        <button id="btn-repeat" class="bar-btn" title="Activar repetición">
+          <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/></svg>
         </button>
       </div>
       <div class="bar-seek">
@@ -135,28 +198,22 @@
     </div>
 
     <div class="bar-right">
-      <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M18.5 12A4.5 4.5 0 0 0 16 7.97v8.05c1.48-.73 2.5-2.25 2.5-4.02zM5 9v6h4l5 5V4L9 9H5zm11-.5v9a6.5 6.5 0 0 0 0-9z"/></svg>
+      <button id="btn-np" class="bar-btn" title="Vista Reproduciendo">
+        <svg viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd" width="18" height="18"><path d="M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5zm2 0v14h8V5H5zm10 0v14h4V5h-4z"/></svg>
+      </button>
+      <button id="btn-lyrics" class="bar-btn" title="Letra">
+        <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
+      </button>
+      <button id="btn-queue" class="bar-btn" title="Cola">
+        <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M15 6H3v2h12V6zm0 4H3v2h12v-2zM3 16h8v-2H3v2zM17 6v8.18A3 3 0 0 0 16 14a3 3 0 1 0 3 3V8h3V6h-5z"/></svg>
+      </button>
+      <button id="btn-mute" class="bar-btn" title="Silenciar"></button>
       <div class="slider-track" id="vol-track">
         <div class="slider-fill" id="vol-fill"></div>
         <div class="slider-thumb" id="vol-thumb"></div>
       </div>
-      <button id="btn-queue" class="bar-btn" title="Cola">
-        <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/></svg>
-      </button>
-      <button id="btn-lyrics" class="bar-btn" title="Letra">
-        <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M9 3v11.5a3.5 3.5 0 0 1-7 0v-1.5h2v1.5a1.5 1.5 0 1 0 3 0V3h2zm6 0h6v2h-6V3zm0 4h6v2h-6V7zm0 4h4v2h-4v-2z"/></svg>
-      </button>
     </div>
   </footer>
-
-  <div id="queue-panel">
-    <div class="queue-header">
-      <span class="queue-title">Cola de reproducción</span>
-      <span class="queue-meta" id="queue-meta"></span>
-      <button id="btn-queue-close">✕</button>
-    </div>
-    <ul id="queue-list"></ul>
-  </div>
 
   <audio id="audio"></audio>
   <script src="renderer.js"></script>
