@@ -93,9 +93,10 @@ module.exports = function createGemini(dir) {
         if (m.serverContent?.outputTranscription?.text) {
           said += m.serverContent.outputTranscription.text
           // Google a veces manda la transcripción pero nunca el audio: si ya va diciendo
-          // palabras y en 1.5 s no llega sonido, se corta ahí en lugar de esperar al final
+          // palabras y en 5 s no llega sonido, se corta ahí en lugar de esperar al final. (El audio
+          // normalmente llega 0.7–1.6 s DESPUÉS del texto: con 1.5 s se cortaban respuestas buenas)
           if (turn && !turn.pcm.length && !turn.noAudio) {
-            turn.noAudio = setTimeout(() => { if (turn && !turn.pcm.length) { turn.silent = true; ws.terminate() } }, 1500)
+            turn.noAudio = setTimeout(() => { if (turn && !turn.pcm.length) { turn.silent = true; ws.terminate() } }, 5000)
           }
         }
         if (!turn) return
