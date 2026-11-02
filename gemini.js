@@ -15,10 +15,9 @@ const LIVE_SYSTEM = 'Eres una locutora de radio mexicana joven, cálida y carism
   'palabra por palabra, el texto que te mandan, actuándolo con emoción, sonrisas en la voz, pausas naturales y acento ' +
   'mexicano relajado. No agregues, quites ni cambies nada. No respondas ni comentes: sólo dilo.'
 const TTS_GAP_MS = 21000   // el nivel gratis de voz permite ~3 frases por minuto
-// Estilo de la voz del DJ (la instrucción se lee, el texto se actúa)
-const VOICE_STYLE = 'Habla como una locutora de radio mexicana joven, cálida y carismática, platicando con un amigo: ' +
-  'con emoción y sonrisas en la voz, a ritmo ágil de radio (un poco rápido, sin alargar las pausas). Acento mexicano, ' +
-  'relajado, nada formal. Di esto:'
+// Estilo de la voz del DJ. Corto y separado del texto: con instrucciones largas el
+// modelo a veces las lee en voz alta.
+const VOICE_STYLE = 'Locutora de radio mexicana joven, cálida y alegre, ritmo ágil. Lee en voz alta sólo el texto entre corchetes:'
 
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 
@@ -96,13 +95,17 @@ module.exports = function createGemini(dir) {
   async function ttsSpeak(model, text) {
     lastCall[model] = Date.now()
     const j = await request(model, {
-      contents: [{ parts: [{ text: `${VOICE_STYLE}\n${text}` }] }],
+      contents: [{ parts: [{ text: `${VOICE_STYLE}\n[${text}]` }] }],
       generationConfig: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICE } } } },
     })
     const part = j.candidates?.[0]?.content?.parts?.find(p => p.inlineData)
     if (!part) throw new Error('network')
     const data = Buffer.from(part.inlineData.data, 'base64')
-    return /wav/.test(part.inlineData.mimeType) ? data : pcmToWav(data, +(/rate=(\d+)/.exec(part.inlineData.mimeType)?.[1] || 24000))
+    const wav = /wav/.test(part.inlineData.mimeType) ? data : pcmToWav(data, +(/rate=(\d+)/.exec(part.inlineData.mimeType)?.[1] || 24000))
+    // Si dura mucho más de lo que se tarda en decir el texto, leyó de más (p. ej. la instrucción)
+    const words = text.split(/\s+/).filter(Boolean).length
+    if (wavSeconds(wav) > words * 0.62 + 2) throw new Error('misread')
+    return wav
   }
 
   // Frase → archivo de audio. Se guarda en caché: lo que ya se dijo una vez no gasta otra vez.
@@ -115,16 +118,21 @@ module.exports = function createGemini(dir) {
       let wav = null
       const day = quotaDay()
       // El modelo disponible que menos tenga que esperar por el límite por minuto
-      const ready = TTS_MODELS.filter(m => exhausted[m] !== day)
-        .sort((a, b) => (lastCall[a] || 0) - (lastCall[b] || 0))
-      for (const model of ready) {
-        const wait = (lastCall[model] || 0) + TTS_GAP_MS - Date.now()
-        if (wait > 0) await sleep(wait)
-        try { wav = await ttsSpeak(model, text); break }
-        catch (e) {
-          if (e.message === 'quota') exhausted[model] = day
-          else if (e.message !== 'network') break
+      // Siempre el primer modelo disponible (cada uno hace la voz un poco distinta): sólo se
+      // pasa al siguiente cuando se acaba su cuota del día. Un intento extra si leyó de más.
+      let misreads = 0
+      for (const model of TTS_MODELS.filter(m => exhausted[m] !== day)) {
+        for (let attempt = 0; attempt < 2 && !wav; attempt++) {
+          const wait = (lastCall[model] || 0) + TTS_GAP_MS - Date.now()
+          if (wait > 0) await sleep(wait)
+          try { wav = await ttsSpeak(model, text) }
+          catch (e) {
+            if (e.message === 'quota') { exhausted[model] = day; break }
+            if (e.message === 'misread' && ++misreads < 3) continue
+            break
+          }
         }
+        if (wav || misreads >= 3) break
       }
       if (!wav) wav = await liveSpeak(text)
       fs.mkdirSync(VOICE_DIR, { recursive: true })
@@ -169,6 +177,12 @@ module.exports = function createGemini(dir) {
 
     say, think,
   }
+}
+
+// Duración de un wav PCM (lee la cabecera)
+function wavSeconds(wav) {
+  const rate = wav.readUInt32LE(24), bytesPerSec = wav.readUInt32LE(28) || rate * 2
+  return (wav.length - 44) / bytesPerSec
 }
 
 function pcmToWav(pcm, rate) {

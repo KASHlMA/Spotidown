@@ -1886,12 +1886,9 @@ function topArtistWeek() {
 }
 
 function blockFacts(block) {
-  const d = new Date(), first = block.songs[0], p = plays[first.path], h = d.getHours()
+  const first = block.songs[0], p = plays[first.path]
   const old = block.songs.find(forgotten)
   return {
-    // Sólo el momento del día (para el tono), nunca la hora exacta
-    momento: h < 6 ? 'madrugada' : h < 12 ? 'mañana' : h < 19 ? 'tarde' : 'noche',
-    dia: DAYS[d.getDay()],
     vibra: block.vibe.name.replace(' · ', ' con mood '),
     primera_cancion: first.title, primer_artista: splitArtists(first.artist)[0] || '',
     // Sólo si hay historial: sin él la IA cree que 0 = "nunca la has oído"
@@ -1959,6 +1956,7 @@ async function djLine(kind, block) {
     f.saludo = h >= 5 && h < 12 ? 'Buenos días' : h >= 12 && h < 19 ? 'Buenas tardes' : 'Buenas noches'
     f.nombre = userName || undefined
     f.hora = d.toLocaleTimeString('es-MX', { hour: 'numeric', minute: '2-digit', hour12: true })
+    f.dia = DAYS[d.getDay()]
   }
   if (dj.ai) {
     const r = await api.djThink(DJ_SYSTEM, `${DJ_TASK[kind] || DJ_TASK.next}\nDatos: ${JSON.stringify(f)}`)
@@ -2059,31 +2057,18 @@ function newBlock(kind, exclude = []) {
 }
 
 let userName    = load('userName', '')
-let djAutoStart = load('djAutoStart', true)
 
-async function djStart(kind = 'intro') {
+// La primera vez que lo inicias en cada sesión te saluda (hora, tu nombre); luego ya no
+let welcomed = false
+async function djStart() {
   if (!allSongs.length) return
   dj.recent = []
+  const kind = welcomed ? 'intro' : 'welcome'
+  welcomed = true
   const block = newBlock(kind)
   if (!block) { djSay('Todavía estoy conociendo tu música. Dame un ratito a que termine de clasificarla.'); return }
   if (rightMode !== 'dj') setRight('dj')
   await djPlay(block)
-}
-
-// Al abrir la app: en cuanto la biblioteca y sus géneros están cargados, el DJ te recibe.
-// Sólo una vez por sesión y sólo si no has puesto otra cosa antes.
-let welcomed = false
-function maybeWelcome() {
-  if (welcomed || !djAutoStart) return
-  welcomed = true
-  const t0 = Date.now()
-  const wait = setInterval(() => {
-    if (currentSong) { clearInterval(wait); return }
-    if (getGenreGroups().genres.length || Date.now() - t0 > 15000) {
-      clearInterval(wait)
-      if (allSongs.length) djStart('welcome')
-    }
-  }, 300)
 }
 
 function djStop() {
@@ -2612,7 +2597,6 @@ async function scanLibrary() {
   setStatus(`${allSongs.length} canciones`)
   analyzeAudio(files)
   tagLibrary()
-  maybeWelcome()
 }
 
 function refreshLibraryViews() {
@@ -2744,7 +2728,6 @@ function openSettings() {
   $('lfm-msg').textContent = lfm.ready ? 'Last.fm ya está conectado. Pega otra key sólo si quieres cambiarla.' : ''
   $('gem-msg').textContent = dj.ai ? 'Gemini ya está conectado. Pega otra key sólo si quieres cambiarla.' : ''
   $('dj-name').value = userName
-  $('dj-auto').checked = djAutoStart
   $('lfm-msg').className = $('gem-msg').className = 'modal-msg'
   $('lfm-key').value = $('gem-key').value = ''
   $('lfm-key').focus()
@@ -2754,9 +2737,7 @@ function closeSettings() { $('settings').hidden = true }
 // Guarda nombre y bienvenida, y sólo las keys que se escribieron (cada una se comprueba antes)
 async function saveSettings() {
   userName = $('dj-name').value.trim()
-  djAutoStart = $('dj-auto').checked
   save('userName', userName)
-  save('djAutoStart', djAutoStart)
   const lk = $('lfm-key').value.trim(), gk = $('gem-key').value.trim()
   if (!lk && !gk) { closeSettings(); return }
   $('lfm-save').disabled = true
