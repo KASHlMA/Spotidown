@@ -2104,6 +2104,8 @@ function cleanLine(t) {
     .replace(/\s*¿?\s*a poco no se (te )?antoja\s*\??/gi, '').replace(/\s{2,}/g, ' ').replace(/[*"“”]/g, '').replace(/\brollas?\b/gi, m => m.replace(/ll/i, 'l')).trim()
 }
 
+const clockText = t => new Date(t).toLocaleTimeString('es-MX', { hour: 'numeric', minute: '2-digit', hour12: true })
+
 async function djLine(kind, block) {
   const f = blockFacts(block)
   const ph = partOfDay(new Date(Date.now() + (block.ahead || 0)).getHours())
@@ -2128,7 +2130,7 @@ async function djLine(kind, block) {
   if (transition && dj.sinceHello >= 2) {
     f.nombre = userName || undefined
     // ahead: se prepara unos segundos antes de que acabe la canción; la hora es la de cuando hable
-    f.hora = new Date(Date.now() + (block.ahead || 0)).toLocaleTimeString('es-MX', { hour: 'numeric', minute: '2-digit', hour12: true })
+    f.hora = block.hora = clockText(Date.now() + (block.ahead || 0))
     const where = ['a la mitad de la frase', 'al final', 'al principio pero sin empezar con su nombre', 'como comentario al pasar'][Math.floor(Math.random() * 4)]
     task += ` Esta vez dile su nombre (si lo hay) y la hora tal cual viene en los datos (con números), ${where}.`
     block.timed = Date.now()
@@ -2342,6 +2344,7 @@ async function djPlay(block, prepared, after) {
   if (ready) { await after; dj.thinking = false; await speak(line, prepared.file, startMusic) }
   else await speakLive(line, startMusic, after)
   startMusic()
+  setTimeout(() => { if (dj.on && playContext === DJ_CTX) djPrepare(blockLeftMs()) }, 5000)
   prepareAlt()
 }
 
@@ -2618,15 +2621,29 @@ async function djChange(fn) {
 }
 
 // La frase preparada dice una hora que ya no cuadra (adelantaste o pausaste la canción)
-const staleNext = (at = Date.now()) => dj.next?.block.timed && Math.abs(at - dj.next.block.speakAt) > 60000
+// Lo que falta para que acabe el bloque: lo que queda de esta canción + las que siguen
+function blockLeftMs() {
+  const now = isFinite(audio.duration) ? (audio.duration - audio.currentTime) * 1000 : 0
+  return now + upcoming(99).reduce((a, i) => a + (filtered[i]?.duration || 0) * 1000, 0)
+}
+
+const staleNext = (at = Date.now()) => !!dj.next?.block.hora && dj.next.block.hora !== clockText(at)
 
 function djNextBlock() {
   return djChange(async () => {
-    if (staleNext()) dj.next = null
     if (!dj.next && dj.prep) {
       dj.thinking = true   // te avisa que está preparando lo que sigue
       renderDjPanel()
       await dj.prep
+    }
+    // La hora ya no cuadra (te brincaste canciones): mismas rolas, la frase se dice en vivo
+    if (staleNext()) {
+      const { block } = dj.next
+      dj.next = null
+      block.ahead = 0
+      block.timed = block.hora = undefined
+      await djPlay(block)
+      return
     }
     if (dj.next) { const { block, line, file } = dj.next; await djPlay(block, { line, file }); return }
     const block = await continueBlock()
