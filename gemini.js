@@ -13,11 +13,14 @@ const LIVE_MODEL = 'gemini-2.5-flash-native-audio-latest'
 const VOICE      = 'Laomedeia'
 // El guion va en las instrucciones y sólo se le dice "¡Al aire!": si el texto llega como
 // mensaje, la voz a veces lo toma como una petición y contesta o se brinca partes.
-const liveSystem = script => 'Eres DJ Nat, una locutora de radio mexicana joven, muy expresiva, cálida, juguetona y ' +
-  'carismática. Estás al aire. Cuando el productor diga "¡Al aire!", dices EN VOZ ALTA tu guion COMPLETO, de la primera ' +
-  'a la última palabra, actuándolo con muchas emociones, sonrisas en la voz, energía de radio y acento mexicano. ' +
-  'No agregues ni quites nada, no comentes, y NUNCA menciones canciones, artistas ni datos que no estén en el guion. ' +
-  'Tu guion es:\n' + script
+// La personalidad va descrita como "quién es", no como "cómo decirlo": con frases tipo
+// "con sonrisas y acento mexicano" la voz a veces decía en voz alta una acotación como
+// "(Con energía, sonriendo y con acento mexicano)".
+const liveSystem = script => 'Eres DJ Nat, una locutora de radio mexicana de 25 años: muy expresiva, cálida, juguetona, ' +
+  'carismática y siempre de buenas. Estás al aire. Cuando el productor diga "¡Al aire!", dices tu guion COMPLETO, de la ' +
+  'primera a la última palabra, con toda tu personalidad. Sólo dices las palabras del guion: nada de acotaciones, ' +
+  'descripciones ni texto entre paréntesis, no agregues ni quites nada, no comentes, y NUNCA menciones canciones, ' +
+  'artistas ni datos que no estén en el guion. Tu guion es:\n' + script
 const ON_AIR = '¡Al aire!'
 // Cambiar esta etiqueta invalida la caché de audios generados con versiones anteriores
 const VOICE_VERSION = 'v5-al-aire'
@@ -245,7 +248,7 @@ module.exports = function createGemini(dir) {
   }
 
   // Para cuando alguien está esperando: el audio se manda a onChunk en cuanto llega, así Nat
-  // empieza a hablar en ~2 s. Un solo intento (si Google no manda audio, lanza error sin haber
+  // empieza a hablar en ~2-3 s. Un solo intento (si Google no manda audio, lanza error sin haber
   // sonado nada y el renderer usa Dalia, que ya tiene lista). Si cortó el final, lo que faltó
   // se genera y se encadena también en vivo. Se resuelve con { file } si ya estaba en caché.
   async function sayNow(text, onChunk) {
@@ -253,9 +256,29 @@ module.exports = function createGemini(dir) {
     if (fs.existsSync(file)) return { file }
     const session = await openLive(text)
     let emitted = false
+    // Compuerta: el audio se retiene hasta que la transcripción muestra cómo empieza. Si
+    // empieza con una acotación "(Con energía…)", se corta antes de que se escuche nada.
+    const held = []
+    let open = false, stage = false
+    const release = () => { open = emitted = true; for (const x of held.splice(0)) onChunk(x) }
+    const gate = b => {
+      if (open) { onChunk(b); return }
+      held.push(b)
+      const said = session.said().trim()
+      if (/^[([]/.test(said)) { stage = true; session.close(); return }
+      const heldSec = held.reduce((n, x) => n + x.length, 0) / 48000
+      if (said.split(/\s+/).length >= 2 || heldSec > 1.2) release()
+    }
     try {
-      let buf = await session.speak(ON_AIR, b => { emitted = true; onChunk(b) })
+      let buf
+      try {
+        buf = await session.speak(ON_AIR, gate)
+      } catch (e) {
+        if (stage) throw Object.assign(new Error('network'), { detail: `acotación: ${session.said()}` })
+        throw e
+      }
       if (!buf.length) throw Object.assign(new Error('network'), { detail: `sin audio; dijo: ${session.said()}` })
+      if (!open) release()   // frase cortita: terminó antes de abrir la compuerta
       await sleep(1200)   // la transcripción llega un poco después que el audio
       let said = session.said()
       session.close()

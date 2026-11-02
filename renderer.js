@@ -1814,7 +1814,7 @@ function weightedPick(items, weight) {
 // frases armadas y palabras clave. La voz es Gemini (Laomedeia) o la de Windows.
 const DJ_CTX = { key: 'dj:', title: 'DJ Nat' }
 const dj = {
-  on: false, ai: false, vibe: null, recent: [], next: null, prep: null, alt: null, altPrep: null,
+  on: false, ai: false, vibe: null, recent: [], next: null, prep: null, alt: null, altPrep: null, sinceHello: 0,
   log: [], thinking: false, speaking: false,
 }
 const DAYS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado']
@@ -1836,7 +1836,10 @@ function timeBoost(id) {
 function pickVibe(exclude = []) {
   const gg = getGenreGroups()
   const score = songs => { let a = 0; for (const s of songs) a += affinity(s); return 1 + a }
-  const genres = gg.genres.filter(g => g.songs.length >= 8 && !exclude.includes(g.key))
+  // Se excluye por género: "merengue+m-bailar" también excluye "merengue" (si no, "cambiar
+  // de vibra" podía pasar de merengue a merengue)
+  const excludeGenres = exclude.map(k => k.split('+')[0])
+  const genres = gg.genres.filter(g => g.songs.length >= 8 && !excludeGenres.includes(g.key))
   if (!genres.length) return null
   const genre = weightedPick(genres, g => score(g.songs) * timeBoost(g.key) * (dj.recent.includes(g.key) ? 0.15 : 1))
   const inGenre = new Set(genre.songs)
@@ -1904,8 +1907,8 @@ const DJ_SYSTEM =
   'joven: cálida, carismática y con jerga mexicana natural (la neta, va, ¿a poco no?), sin exagerar. ' +
   'Te llamas DJ Nat. Reglas: de 1 a 2 frases y máximo 25 palabras. Se escribe "rola" (con una sola ele). ' +
   'NO te presentes ni digas tu nombre (nada de "soy DJ Nat", "aquí tu…") salvo que la tarea lo pida. NO saludes ni digas la hora o el día, salvo que la tarea lo pida. Ve directo a la música. ' +
-  'Usa sólo los datos que te dan; no inventes canciones, artistas ni datos. Sin emojis, comillas, asteriscos ni ' +
-  'listas. Háblale de tú. Varía tus frases: no empieces siempre igual.'
+  'Usa sólo los datos que te dan; no inventes canciones, artistas ni datos. Sin emojis, comillas, asteriscos, ' +
+  'listas ni acotaciones entre paréntesis. Háblale de tú. Varía tus frases: no empieces siempre igual.'
 
 const DJ_TASK = {
   welcome: 'El usuario acaba de abrir la app. Salúdalo con el saludo y su nombre (si lo hay), preséntate ("soy DJ Nat"), dile la hora en palabras ' +
@@ -1943,9 +1946,10 @@ function templateLine(kind, f) {
     .replace('{saludo}', f.saludo || '¡Hola').replace('{nombre}', f.nombre ? `, ${f.nombre}` : '').replace('{hora}', f.hora || '')
 }
 
-// Lo que escribe la IA antes de pasarlo a voz: sin comillas ni asteriscos, "rola" bien escrito
+// Lo que escribe la IA antes de pasarlo a voz: sin acotaciones entre paréntesis (la voz las
+// leería), comillas ni asteriscos, "rola" bien escrito
 function cleanLine(t) {
-  return String(t).replace(/[*"“”]/g, '').replace(/\brollas?\b/gi, m => m.replace(/ll/i, 'l')).trim()
+  return String(t).replace(/\s*[([][^)\]]*[)\]]\s*/g, ' ').replace(/\s{2,}/g, ' ').replace(/[*"“”]/g, '').replace(/\brollas?\b/gi, m => m.replace(/ll/i, 'l')).trim()
 }
 
 async function djLine(kind, block) {
@@ -1957,9 +1961,18 @@ async function djLine(kind, block) {
     f.nombre = userName || undefined
     f.hora = d.toLocaleTimeString('es-MX', { hour: 'numeric', minute: '2-digit', hour12: true })
     f.dia = DAYS[d.getDay()]
+    block.timed = Date.now()
+  }
+  // Cada 3 bloques (contando desde el saludo) dice tu nombre y la hora, como en la radio
+  let task = DJ_TASK[kind] || DJ_TASK.next
+  if ((kind === 'next' || kind === 'switch') && dj.sinceHello >= 2) {
+    f.nombre = userName || undefined
+    f.hora = new Date().toLocaleTimeString('es-MX', { hour: 'numeric', minute: '2-digit', hour12: true })
+    task += ' Esta vez, de forma natural, dile su nombre (si lo hay) y la hora en palabras.'
+    block.timed = Date.now()
   }
   if (dj.ai) {
-    const r = await api.djThink(DJ_SYSTEM, `${DJ_TASK[kind] || DJ_TASK.next}\nDatos: ${JSON.stringify(f)}`)
+    const r = await api.djThink(DJ_SYSTEM, `${task}\nDatos: ${JSON.stringify(f)}`)
     if (r.ok) return cleanLine(r.ok)
   }
   return templateLine(kind, f)
@@ -2085,9 +2098,14 @@ async function speakLive(text, onNearEnd) {
     onNearEnd: nearEnd,
   })
   activeStream = player
+  const t0 = Date.now()
   let r = await api.djSayNow(text, id)
-  // Google no mandó audio (no sonó nada): un intento más con la voz de Nat antes de Dalia
-  if (activeStream === player && !player.started() && r.error && !r.partial) r = await api.djSayNow(text, id)
+  // Google no mandó audio (no sonó nada): se reintenta con la voz de Nat; Dalia sólo si en
+  // ~9 s no lo logra (ya está lista, así que entra sin otra espera)
+  while (activeStream === player && !player.started() && r.error && !r.partial &&
+         r.error !== 'invalid-key' && Date.now() - t0 < 9000) {
+    r = await api.djSayNow(text, id)
+  }
   if (activeStream !== player) return   // se detuvo el DJ mientras hablaba
   activeStream = null
   if (player.started()) {
@@ -2112,6 +2130,7 @@ async function djPlay(block, prepared) {
   dj.on = true
   dj.vibe = block.vibe
   dj.recent = [block.vibe.key, ...dj.recent.filter(k => k !== block.vibe.key)].slice(0, 3)
+  dj.sinceHello = block.timed ? 0 : dj.sinceHello + 1
   dj.next = null
   const ready = prepared && 'file' in prepared
   dj.thinking = !ready
@@ -2238,7 +2257,9 @@ function djSwitch() {
   return djChange(async () => {
     const alt = dj.alt
     dj.alt = null
-    if (alt && alt.block.vibe.key !== dj.vibe?.key) { await djPlay(alt.block, { line: alt.line, file: alt.file }); return }
+    // Si ya preparada dice la hora, sólo sirve si es reciente
+    const fresh = !alt?.block.timed || Date.now() - alt.block.timed < 5 * 60 * 1000
+    if (alt && fresh && alt.block.vibe.key !== dj.vibe?.key) { await djPlay(alt.block, { line: alt.line, file: alt.file }); return }
     const block = newBlock('switch', dj.vibe ? [dj.vibe.key] : [])
     if (block) await djPlay(block)
   })
