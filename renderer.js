@@ -1621,7 +1621,7 @@ function loadAndPlay(idx) {
   renderRight()
   countedSong = null
   // Última canción de la lista: se prepara lo que sigue para que el cambio sea inmediato
-  if (dj.on && playContext === DJ_CTX) { if (!upcoming(1).length) djPrepare() }
+  if (dj.on && playContext === DJ_CTX) { if (!upcoming(1).length) djPrepare((song.duration || 0) * 1000) }
   else if (!upcoming(1).length && repeatMode !== 1) prefetchRadio(song)
 
   if (audioCtx.state === 'suspended') audioCtx.resume()
@@ -2575,9 +2575,8 @@ function djStop() {
   renderDjPanel()
 }
 
-// Mientras suena la última canción del bloque se prepara el siguiente (frase + voz).
-// Si al siguiente le toca decir la hora, se prepara hasta los últimos segundos de la
-// canción (ahead = lo que falta), para que la hora no salga vieja ni haya silencio
+// Desde que empieza la última canción del bloque se prepara el siguiente (frase + voz).
+// ahead = lo que falta de la canción: si le toca decir la hora, dice la de cuando va a hablar
 function djPrepare(ahead = 0) {
   if (dj.next || dj.prep) return dj.prep
   if (dj.sinceHello >= 2 && !ahead) return null
@@ -2585,6 +2584,7 @@ function djPrepare(ahead = 0) {
     const block = await continueBlock()
     if (!block) return
     block.ahead = ahead
+    block.speakAt = Date.now() + ahead
     const line = await djLine(block.kind, block)
     const file = await djVoice(line)
     if (dj.on) dj.next = { block, line, file }
@@ -2601,8 +2601,12 @@ async function djChange(fn) {
   try { await fn() } finally { djChanging = false }
 }
 
+// La frase preparada dice una hora que ya no cuadra (adelantaste o pausaste la canción)
+const staleNext = (at = Date.now()) => dj.next?.block.timed && Math.abs(at - dj.next.block.speakAt) > 60000
+
 function djNextBlock() {
   return djChange(async () => {
+    if (staleNext()) dj.next = null
     if (!dj.next && dj.prep) {
       dj.thinking = true   // te avisa que está preparando lo que sigue
       renderDjPanel()
@@ -3054,7 +3058,10 @@ audio.addEventListener('ended', () => { if (repeatMode !== 2) nextSong() })
 audio.addEventListener('timeupdate', () => {
   if (!dj.on || playContext !== DJ_CTX || upcoming(1).length || repeatMode === 2) return
   const left = audio.duration - audio.currentTime
-  if (left > 0 && left <= 15) djPrepare(left * 1000)
+  if (left > 0 && left <= 15) {
+    if (staleNext(Date.now() + left * 1000)) dj.next = null   // se rehace con la hora buena
+    djPrepare(left * 1000)
+  }
 })
 audio.addEventListener('play', () => {
   setPlayState(true)
