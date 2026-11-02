@@ -347,6 +347,19 @@ module.exports = function createGemini(dir) {
 
     say, sayNow, think,
     cached: text => fs.existsSync(fileFor(text)),   // ¿esta frase ya está grabada?
+    // Borra las frases de más de maxDays días (transiciones, peticiones: nunca se repiten
+    // igual), menos las de keep (los saludos guardados, que sí se vuelven a usar)
+    cleanup(keep, maxDays = 7) {
+      const keepNames = new Set(keep.map(t => path.basename(fileFor(t))))
+      const limit = Date.now() - maxDays * 864e5
+      let removed = 0
+      for (const name of fs.existsSync(VOICE_DIR) ? fs.readdirSync(VOICE_DIR) : []) {
+        if (keepNames.has(name)) continue
+        const f = path.join(VOICE_DIR, name)
+        try { if (fs.statSync(f).mtimeMs < limit) { fs.unlinkSync(f); removed++ } } catch {}
+      }
+      return removed
+    },
   }
 }
 

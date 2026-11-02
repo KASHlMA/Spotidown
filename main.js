@@ -256,6 +256,7 @@ ipcMain.handle('gemini-set-key', (_, key) => gemini.setKey(key))
 ipcMain.handle('dj-say', wrap((text, engine) => engine === 'gemini' ? gemini.say(text) : voice.say(text)))
 // En vivo: el audio llega al renderer por pedazos ('dj-chunk') para que Nat hable al instante
 ipcMain.handle('dj-cached', (_, text) => gemini.cached(text))
+ipcMain.handle('dj-clean', (_, keep) => gemini.cleanup(keep))
 
 // ── IPC: clima (Open-Meteo, gratis y sin key) para que DJ Nat lo comente ───────
 // Ubicación: la ciudad que escribiste en Ajustes o, si no, la aproximada por tu IP.

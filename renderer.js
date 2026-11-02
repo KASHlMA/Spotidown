@@ -2516,15 +2516,18 @@ async function cachedGreeting() {
 // Graba los que falten, empezando por los de este momento del día, espaciados para no
 // chocar con el límite de sesiones por minuto de Google
 let greetWarming = false
+// Todos los saludos guardados; los de este momento (y los especiales de hoy) primero
+const allGreetings = () => [...new Set([...greetingsNow(), ...[...Object.values(GREETINGS).flat(),
+  ...Object.values(GREETINGS_WEATHER).flat(), ...Object.values(GREETINGS_DAY).flatMap(d => Object.values(d).flat())].map(greetingText)])]
+
 async function warmGreetings() {
   if (greetWarming || !dj.ai) return
   greetWarming = true
+  // Las demás frases grabadas se borran a los 7 días; los saludos se quedan
+  api.djClean(allGreetings()).catch(() => {})
   try {
-    // Primero los de este momento (y los especiales de hoy), luego todos los demás
-    const all = [...greetingsNow(), ...Object.values(GREETINGS).flat(), ...Object.values(GREETINGS_WEATHER).flat(),
-                 ...Object.values(GREETINGS_DAY).flatMap(d => Object.values(d).flat())].map(greetingText)
     const fails = load('greetFails', {})
-    for (const t of [...new Set(all)]) {
+    for (const t of allGreetings()) {
       if ((fails[t] || 0) >= 2 || await api.djCached(t)) continue
       while (Date.now() < dj.quietUntil || dj.thinking || dj.speaking) await new Promise(r => setTimeout(r, 5000))
       await api.djSay(t, 'gemini')
