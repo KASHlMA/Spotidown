@@ -104,15 +104,17 @@ function fmtLong(s) {
 
 // encodeURI no escapa '#' ni '?', así que un archivo como "Track #1.mp3" no cargaba
 function toFileUrl(p) {
+  if (api.fileUrl) return api.fileUrl(p)   // celular
   return 'file:///' + p.split('\\').map((seg, i) => i === 0 ? seg : encodeURIComponent(seg)).join('/')
 }
+const fileName = p => p.split(/[\\/]/).pop()
 
 function getDur() {
   return isFinite(audio.duration) ? audio.duration : (currentSong?.duration || 0)
 }
 
 function folderName(s) {
-  const parts = s.path.split('\\')
+  const parts = s.path.split(/[\\/]/)
   return parts[parts.length - 2] || 'Sin álbum'
 }
 function splitArtists(a) { return (a || '').split(/\s*,\s*/).filter(Boolean) }
@@ -1633,7 +1635,7 @@ function loadAndPlay(idx) {
     if (err.name === 'AbortError' || song !== currentSong) return
     console.error('Error al reproducir:', song.path, err.message)
     $('bar-song-title').textContent  = '⚠ Error al reproducir'
-    $('bar-song-artist').textContent = song.path.split('\\').pop()
+    $('bar-song-artist').textContent = fileName(song.path)
   })
 }
 
@@ -3513,7 +3515,7 @@ async function scanLibrary() {
     }
     return {
       path: p, mtime,
-      title: p.split('\\').pop().replace(/\.mp3$/i, '').replace(/^\d+\s*[-–.]\s*/, ''),
+      title: fileName(p).replace(/\.(mp3|m4a|flac|ogg|opus|wav|aac)$/i, '').replace(/^\d+\s*[-–.]\s*/, ''),
       artist: '', album: '', duration: 0, cover: null, lyrics: ''
     }
   })
