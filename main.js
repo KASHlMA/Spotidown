@@ -252,19 +252,9 @@ ipcMain.handle('audio-analyze', (_, files) => {
 const wrap = fn => (_, ...a) => fn(...a).then(v => ({ ok: v }), e => ({ error: e.message }))
 ipcMain.handle('gemini-status',  () => ({ hasKey: gemini.hasKey() }))
 ipcMain.handle('gemini-set-key', (_, key) => gemini.setKey(key))
-// engine: 'gemini' (Laomedeia) o 'dalia' (Edge). Con streamId el audio de Gemini se manda
-// al renderer por pedazos ('dj-chunk') para que empiece a sonar mientras se genera.
-ipcMain.handle('dj-say', async (e, text, engine, streamId) => {
-  try {
-    if (engine !== 'gemini') return { ok: await voice.say(text) }
-    const onChunk = streamId
-      ? buf => { if (!e.sender.isDestroyed()) e.sender.send('dj-chunk', streamId, buf.toString('base64')) }
-      : null
-    return { ok: await gemini.say(text, onChunk) }
-  } catch (err) {
-    return { error: err.message, partial: !!err.partial }
-  }
-})
+// engine: 'gemini' (Laomedeia, verificada antes de entregarla) o 'dalia' (Edge, sin límite)
+ipcMain.handle('dj-say', wrap((text, engine) => engine === 'gemini' ? gemini.say(text) : voice.say(text)))
+ipcMain.handle('dj-cached', (_, text) => gemini.cached(text))
 ipcMain.handle('dj-think', wrap((system, prompt, schema) => gemini.think(system, prompt, schema)))
 
 ipcMain.on('open-external', (_, url) => {

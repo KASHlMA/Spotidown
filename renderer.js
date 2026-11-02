@@ -1815,7 +1815,7 @@ function weightedPick(items, weight) {
 const DJ_CTX = { key: 'dj:', title: 'DJ Nat' }
 const dj = {
   on: false, ai: false, vibe: null, recent: [], next: null, prep: null,
-  ttsOffUntil: 0, log: [], thinking: false, speaking: false,
+  log: [], thinking: false, speaking: false,
 }
 const DAYS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado']
 
@@ -1965,13 +1965,12 @@ async function djLine(kind, block) {
   return templateLine(kind, f)
 }
 
-// Texto → archivo de voz. Laomedeia (Gemini, por la API en vivo: sin límite diario);
-// si falla, Dalia (Edge). Si todo falla (sin internet) se usa la voz de Windows.
+// Texto → archivo de voz. Laomedeia (Gemini), generada completa y verificada antes de
+// sonar; si no sale bien, Dalia (Edge, sin límite). Sin internet, la voz de Windows.
 async function djVoice(text) {
-  if (dj.ai && Date.now() >= dj.ttsOffUntil) {
+  if (dj.ai) {
     const r = await api.djSay(text, 'gemini')
     if (r.ok) return r.ok
-    if (r.error === 'quota') dj.ttsOffUntil = Date.now() + 60 * 60 * 1000
   }
   const r = await api.djSay(text, 'dalia')
   return r.ok || null
@@ -1987,8 +1986,9 @@ function duck(on) {
 }
 
 const djAudio = $('dj-voice')
-// onNearEnd: se llama cuando a la voz le falta ~1.5 s (ahí entra la música nueva)
-function speak(text, file, onNearEnd) {
+// onNearEnd: se llama cuando a la voz le falta ~1.5 s (ahí entra la música nueva).
+// quiet: no se escribe en el chat (las respuestas rápidas "¡Va!")
+function speak(text, file, onNearEnd, { quiet = false } = {}) {
   return new Promise(resolve => {
     let done = false, near = false
     const nearEnd = () => { if (!near) { near = true; onNearEnd?.() } }
@@ -2006,7 +2006,8 @@ function speak(text, file, onNearEnd) {
     const guard = setTimeout(finish, 45000)
     dj.speaking = true
     duck(true)
-    djSay(text)   // el texto aparece cuando empieza a hablar, no antes
+    if (quiet) renderDjPanel()
+    else djSay(text)   // el texto aparece cuando empieza a hablar, no antes
     if (file) {
       djAudio.src = toFileUrl(file)
       djAudio.onended = djAudio.onerror = finish
@@ -2025,89 +2026,42 @@ function speak(text, file, onNearEnd) {
   })
 }
 
-// ── Voz en streaming: los pedazos de PCM (16 bits, 24 kHz) se van encolando en Web Audio
-// en cuanto llegan, así Nat empieza a hablar ~4 s después en lugar de esperar todo el audio.
-const voiceOut = audioCtx.createGain()   // la voz no pasa por el volumen/analizador de la música
-voiceOut.connect(audioCtx.destination)
-const voiceStreams = new Map()
-let streamSeq = 0
-let activeStream = null
-api.onDjChunk((id, b64) => voiceStreams.get(id)?.(b64))
-
-function streamVoice(id, { onFirst, onNearEnd }) {
-  let next = 0, playing = 0, ended = false, near = false, resolveDone
-  const sources = []
-  const done = new Promise(r => { resolveDone = r })
-  const check = () => {
-    if (ended && !near && next - audioCtx.currentTime <= 1.5) { near = true; onNearEnd?.() }
-    if (ended && playing === 0) resolveDone()
-  }
-  const timer = setInterval(check, 100)
-  voiceStreams.set(id, b64 => {
-    const bin = atob(b64), n = bin.length >> 1
-    if (!n) return
-    const buf = audioCtx.createBuffer(1, n, 24000), ch = buf.getChannelData(0)
-    for (let i = 0; i < n; i++) {
-      let v = bin.charCodeAt(2 * i) | (bin.charCodeAt(2 * i + 1) << 8)
-      if (v >= 32768) v -= 65536
-      ch[i] = v / 32768
-    }
-    if (!next) { if (audioCtx.state === 'suspended') audioCtx.resume(); onFirst?.() }
-    const src = audioCtx.createBufferSource()
-    src.buffer = buf
-    src.connect(voiceOut)
-    // Colchón de 0.3 s al inicio por si algún pedazo llega tarde
-    const t = Math.max(next, audioCtx.currentTime + (next ? 0.02 : 0.3))
-    src.start(t)
-    next = t + buf.duration
-    playing++
-    sources.push(src)
-    src.onended = () => { playing--; check() }
-  })
-  const stop = () => { clearInterval(timer); voiceStreams.delete(id) }
-  return {
-    started: () => next > 0,
-    end: () => { ended = true; check(); return done.finally(stop) },
-    cancel: () => { for (const s of sources) try { s.stop() } catch {} ; stop(); resolveDone() },
+// ── Respuestas rápidas: cuando le pides algo, Nat contesta al instante con una de estas
+// (ya grabadas) mientras genera y verifica la frase completa, como el DJ de Spotify.
+// Frases completas: con una sola palabra ("¡Va!") la voz se inventaba un programa de radio
+const ACKS = [
+  '¡Va! Dame un segundito y te la pongo.',
+  '¡Sale! Ahorita te busco algo bueno.',
+  '¡Órale, va! Déjame ver qué tengo por aquí.',
+  '¡Claro que sí! Ya te lo estoy buscando.',
+]
+let acksWarming = false
+// Las graba una sola vez (luego quedan en caché para siempre), espaciadas para no chocar
+// con el límite de sesiones por minuto de Google
+async function warmAcks() {
+  if (acksWarming || !dj.ai) return
+  acksWarming = true
+  for (const a of ACKS) {
+    if (await api.djCached(a)) continue
+    await api.djSay(a, 'gemini')
+    await new Promise(r => setTimeout(r, 25000))
   }
 }
-
-// Dice `text` con la voz de Gemini en streaming; si no hay Gemini o falla antes de sonar,
-// cae a speak() con el archivo que haya (actuada / Dalia / voz de Windows).
-async function speakLive(text, onNearEnd) {
-  if (!dj.ai || Date.now() < dj.ttsOffUntil) return speak(text, await djVoice(text), onNearEnd)
-  const id = ++streamSeq
-  let near = false
-  const nearEnd = () => { if (!near) { near = true; onNearEnd?.() } }
-  const player = streamVoice(id, {
-    onFirst: () => { dj.thinking = false; dj.speaking = true; duck(true); djSay(text) },
-    onNearEnd: nearEnd,
-  })
-  activeStream = player
-  const r = await api.djSay(text, 'gemini', id)
-  if (activeStream !== player) return   // se detuvo el DJ mientras hablaba
-  activeStream = null
-  if (player.started()) {
-    await player.end()
-  } else {
-    player.cancel()
-    // Sin pedazos: vino de la caché o de la voz de respaldo (o falló todo)
-    if (!r.ok && r.error === 'quota') dj.ttsOffUntil = Date.now() + 60 * 60 * 1000
-    const file = r.ok || (await api.djSay(text, 'dalia')).ok || null
-    dj.thinking = false
-    return speak(text, file, onNearEnd)
-  }
-  nearEnd()
-  dj.speaking = false
-  duck(false)
-  renderDjPanel()
+async function playAck() {
+  if (!dj.ai) return
+  const ready = []
+  for (const a of ACKS) if (await api.djCached(a)) ready.push(a)
+  if (!ready.length) return
+  const r = await api.djSay(ready[Math.floor(Math.random() * ready.length)], 'gemini')   // en caché: al instante
+  if (r.ok) await speak('', r.ok, null, { quiet: true })
 }
 
 function djSay(text) { dj.log.push({ who: 'dj', text }); dj.log = dj.log.slice(-30); renderDjPanel() }
 
 // Pone un bloque como en la radio: primero habla Nat (lo que ya sonaba sigue mientras
 // prepara qué decir) y cuando está por terminar entra la primera canción desde abajo.
-async function djPlay(block, prepared) {
+// ack: respuesta rápida que está sonando; la frase completa espera a que termine.
+async function djPlay(block, prepared, ack) {
   dj.on = true
   dj.vibe = block.vibe
   dj.recent = [block.vibe.key, ...dj.recent.filter(k => k !== block.vibe.key)].slice(0, 3)
@@ -2116,16 +2070,17 @@ async function djPlay(block, prepared) {
   dj.thinking = !ready
   renderDjPanel()
   const line = prepared?.line ?? await djLine(block.kind, block)
-  if (!dj.on) { dj.thinking = false; renderDjPanel(); return }
+  const file = ready ? prepared.file : await djVoice(line)
+  if (ack) await ack
+  dj.thinking = false
+  if (!dj.on) { renderDjPanel(); return }
   let started = false
   const startMusic = () => {
     if (started || !dj.on) return
     started = true
     playList(block.songs, 0, DJ_CTX)   // entra bajita (la voz la tiene agachada) y sube al terminar
   }
-  // Si ya estaba preparada (siguiente bloque) suena de inmediato; si no, en streaming
-  if (ready) { dj.thinking = false; await speak(line, prepared.file, startMusic) }
-  else await speakLive(line, startMusic)
+  await speak(line, file, startMusic)
   startMusic()
 }
 
@@ -2147,6 +2102,7 @@ async function djStart() {
   if (!block) { djSay('Todavía estoy conociendo tu música. Dame un ratito a que termine de clasificarla.'); return }
   if (rightMode !== 'dj') setRight('dj')
   await djPlay(block)
+  warmAcks()
 }
 
 function djStop() {
@@ -2155,8 +2111,6 @@ function djStop() {
   dj.vibe = null
   djAudio.pause()
   if ('speechSynthesis' in window) speechSynthesis.cancel()
-  activeStream?.cancel()
-  activeStream = null
   dj.speaking = dj.thinking = false
   duck(false)
   renderDjPanel()
@@ -2200,7 +2154,7 @@ function djNextBlock() {
 function djSwitch() {
   return djChange(async () => {
     const block = newBlock('switch', dj.vibe ? [dj.vibe.key] : [])
-    if (block) await djPlay(block)
+    if (block) await djPlay(block, undefined, playAck())
   })
 }
 
@@ -2290,6 +2244,7 @@ async function djAsk(text) {
   text = text.trim()
   if (!text) return
   dj.log.push({ who: 'yo', text })
+  const ack = playAck()
   dj.thinking = true
   renderDjPanel()
   let plan = null
@@ -2307,7 +2262,9 @@ async function djAsk(text) {
   dj.thinking = false
   if (pool.length < 3) {
     const line = 'Uy, no encontré nada así en tu música. ¿Me lo pides de otra forma?'
-    await speak(line, await djVoice(line))
+    const file = await djVoice(line)
+    await ack
+    await speak(line, file)
     return
   }
   const block = { kind: 'request', vibe: { key: 'req:' + fold(plan.title || text), name: plan.title || text }, songs: buildBlock(pool, 6) }
@@ -2318,7 +2275,7 @@ async function djAsk(text) {
   const title = cleanTitle(first.title)
   if (!fold(line).includes(fold(title))) line += ` Arrancamos con ${title}${artist ? ` de ${artist}` : ''}.`
   if (rightMode !== 'dj') setRight('dj')
-  await djPlay(block, { line })
+  await djPlay(block, { line }, ack)
 }
 
 // ── Panel del DJ ──────────────────────────────────────────────────────────────
