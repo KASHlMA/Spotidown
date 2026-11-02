@@ -1788,6 +1788,7 @@ function parseLrc(text) {
 function buildLyrics(raw) {
   const inner = $('lyrics-inner')
   inner.innerHTML = ''
+  $('lyrics-scroll').scrollTop = 0   // la letra nueva empieza arriba aunque la anterior estuviera abajo
   curLyric   = -1
   lyricLines = []
 
