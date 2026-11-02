@@ -2044,7 +2044,8 @@ async function djLine(kind, block) {
   const transition = ['next', 'switch', 'continue', 'drift'].includes(kind)
   if (transition && dj.sinceHello >= 2) {
     f.nombre = userName || undefined
-    f.hora = new Date().toLocaleTimeString('es-MX', { hour: 'numeric', minute: '2-digit', hour12: true })
+    // ahead: se prepara unos segundos antes de que acabe la canción; la hora es la de cuando hable
+    f.hora = new Date(Date.now() + (block.ahead || 0)).toLocaleTimeString('es-MX', { hour: 'numeric', minute: '2-digit', hour12: true })
     task += ' Esta vez, de forma natural, dile su nombre (si lo hay) y la hora tal cual viene en los datos (con números).'
     block.timed = Date.now()
   } else if (transition) {
@@ -2490,14 +2491,16 @@ function djStop() {
   renderDjPanel()
 }
 
-// Mientras suena la última canción del bloque se prepara el siguiente (frase + voz)
-function djPrepare() {
+// Mientras suena la última canción del bloque se prepara el siguiente (frase + voz).
+// Si al siguiente le toca decir la hora, se prepara hasta los últimos segundos de la
+// canción (ahead = lo que falta), para que la hora no salga vieja ni haya silencio
+function djPrepare(ahead = 0) {
   if (dj.next || dj.prep) return dj.prep
-  // Si al siguiente bloque le toca decir la hora, se hace en vivo al momento (no con la de antes)
-  if (dj.sinceHello >= 2) return null
+  if (dj.sinceHello >= 2 && !ahead) return null
   dj.prep = (async () => {
     const block = await continueBlock()
     if (!block) return
+    block.ahead = ahead
     const line = await djLine(block.kind, block)
     const file = await djVoice(line)
     if (dj.on) dj.next = { block, line, file }
@@ -2962,6 +2965,13 @@ audio.addEventListener('loadedmetadata', () => {
   $('t-tot').textContent = fmtTime(getDur())
 })
 audio.addEventListener('ended', () => { if (repeatMode !== 2) nextSong() })
+// Últimos 15 segundos de la última canción del bloque: Nat ya va armando lo que sigue
+// (escribir y grabar la frase tarda de 3 a 8 s)
+audio.addEventListener('timeupdate', () => {
+  if (!dj.on || playContext !== DJ_CTX || upcoming(1).length || repeatMode === 2) return
+  const left = audio.duration - audio.currentTime
+  if (left > 0 && left <= 15) djPrepare(left * 1000)
+})
 audio.addEventListener('play', () => {
   setPlayState(true)
   if (!spectrumRafId) drawSpectrum()
