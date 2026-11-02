@@ -1822,7 +1822,7 @@ function weightedPick(items, weight) {
 const DJ_CTX = { key: 'dj:', title: 'DJ Nat' }
 const dj = {
   on: false, ai: false, vibe: null, recent: [], played: new Set(), next: null, prep: null, alt: null, altPrep: null, sinceHello: 0,
-  quietUntil: 0,   // hasta cuándo no se graba nada en segundo plano (le acabas de escribir)
+  quietUntil: 0, prepWip: null,   // hasta cuándo no se graba nada en segundo plano (le acabas de escribir)
   sameVibe: 0, used: new Set(),   // bloques seguidos en la misma vibra / canciones ya puestas en la sesión
   log: [], thinking: false, speaking: false,
 }
@@ -2351,6 +2351,7 @@ async function djPlay(block, prepared, after) {
   if (!block.vibe.key.startsWith('sim:')) dj.played.add(block.vibe.key.split('+')[0])
   dj.sinceHello = block.timed ? 0 : dj.sinceHello + 1
   dj.next = null
+  dj.prepWip = null
   const ready = prepared && 'file' in prepared
   dj.thinking = !ready
   renderDjPanel()
@@ -2547,6 +2548,7 @@ const DJ_ACKS = {
   ask: ['¡Va! Déjame ver qué tienes por aquí.', '¡Sale! Ahorita te lo busco.', '¡Uy, buena! Dame un segundito.',
         '¡Órale, va! Deja te armo algo.', '¡Claro que sí! Déjame buscarte unas buenas.', '¡A la orden! Ya te busco algo.'],
   switch: ['¡Sale, cambiamos de rollo!', '¡Va, otra vibra!', '¡Órale, a cambiarle!', '¡Va que va, cambiamos!'],
+  next: ['¡Y seguimos con más!', '¡Esto no para!', '¡Aquí seguimos, eh!', '¡No te me vayas, que viene más!'],
 }
 async function cachedAck(kind) {
   if (!dj.ai) return null
@@ -2622,6 +2624,7 @@ function prepareAlt() {
 function djStop() {
   dj.on = false
   dj.next = null
+  dj.prepWip = null
   dj.alt = null
   dj.vibe = null
   djAudio.pause()
@@ -2636,23 +2639,30 @@ function djStop() {
 // Desde que empieza la última canción del bloque se prepara el siguiente (frase + voz).
 // ahead = lo que falta de la canción: si le toca decir la hora, dice la de cuando va a hablar
 function djPrepare(ahead = 0) {
-  if (dj.next || dj.prep) return dj.prep
+  if (dj.next || (dj.prep && dj.prepWip)) return dj.prep
   if (dj.sinceHello >= 2 && !ahead) return null
+  const wip = {}   // lo que va: { block, line }
+  dj.prepWip = wip
   dj.prep = (async () => {
     const block = await continueBlock()
     if (!block) return
     block.ahead = ahead
     block.speakAt = Date.now() + ahead
+    wip.block = block
     const line = await djLine(block.kind, block)
+    wip.line = line
     const file = await djVoice(line)
-    let plain = null
+    if (!dj.on || dj.prepWip !== wip) return   // ya se usó en vivo
+    dj.next = { block, line, file }
     if (block.hora) {
       const pl = await djLine(block.kind, { ...block, hora: undefined, timed: undefined }, { noTime: true })
-      plain = { line: pl, file: await djVoice(pl) }
+      const plain = { line: pl, file: await djVoice(pl) }
+      if (dj.next?.block === block) dj.next.plain = plain
     }
-    if (dj.on) dj.next = { block, line, file, plain }
-  })().finally(() => { dj.prep = null })
-  return dj.prep
+  })().catch(() => {})   // si algo falla, se arma en vivo al acabar el bloque
+  const p = dj.prep
+  p.finally(() => { if (dj.prep === p) dj.prep = null; if (dj.prepWip === wip) dj.prepWip = null })
+  return p
 }
 
 // Un solo cambio de bloque a la vez: si adelantas canciones o le das "siguiente" varias
@@ -2678,7 +2688,19 @@ function djNextBlock() {
     if (!dj.next && dj.prep) {
       dj.thinking = true   // te avisa que está preparando lo que sigue
       renderDjPanel()
-      await dj.prep
+      // Máximo 1 s: grabar la frase verificada tarda ~10 s; si no está, se dice en vivo
+      await Promise.race([dj.prep, new Promise(r => setTimeout(r, 1000))])
+    }
+    // Te brincaste la última canción antes de que la voz estuviera lista: mismas rolas, y el
+    // texto que ya tenía (si lo tenía) se dice en vivo, con una frase corta grabada mientras
+    if (!dj.next && dj.prepWip?.block) {
+      const { block, line } = dj.prepWip
+      dj.prepWip = null
+      const keep = line && (!block.hora || block.hora === clockText(Date.now()))
+      if (!keep) { block.ahead = 0; block.timed = block.hora = undefined }
+      const ack = await cachedAck('next')
+      await djPlay(block, keep ? { line } : undefined, ack ? speak(ack.text, ack.file) : undefined)
+      return
     }
     // La hora ya no cuadra (te brincaste canciones): mismas rolas con la frase sin hora (ya
     // grabada, al instante); si no hay, se dice en vivo con la hora de ahorita
@@ -2692,7 +2714,9 @@ function djNextBlock() {
     }
     if (dj.next) { const { block, line, file } = dj.next; await djPlay(block, { line, file }); return }
     const block = await continueBlock()
-    if (block) await djPlay(block)
+    if (!block) return
+    const ack = await cachedAck('next')
+    await djPlay(block, undefined, ack ? speak(ack.text, ack.file) : undefined)
   })
 }
 
