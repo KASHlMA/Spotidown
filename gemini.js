@@ -87,15 +87,26 @@ module.exports = function createGemini(dir) {
         let m
         try { m = JSON.parse(raw) } catch { return }
         if (m.setupComplete) { ready = true; clearTimeout(setupTimer); resolve(session); return }
-        if (m.serverContent?.outputTranscription?.text) said += m.serverContent.outputTranscription.text
+        if (m.serverContent?.outputTranscription?.text) {
+          said += m.serverContent.outputTranscription.text
+          // Google a veces manda la transcripción pero nunca el audio: si ya va diciendo
+          // palabras y en 1.5 s no llega sonido, se corta ahí en lugar de esperar al final
+          if (turn && !turn.pcm.length && !turn.noAudio) {
+            turn.noAudio = setTimeout(() => { if (turn && !turn.pcm.length) { turn.silent = true; ws.terminate() } }, 1500)
+          }
+        }
         if (!turn) return
         for (const p of m.serverContent?.modelTurn?.parts || []) {
-          if (p.inlineData) turn.pcm.push(Buffer.from(p.inlineData.data, 'base64'))
+          if (!p.inlineData) continue
+          const buf = Buffer.from(p.inlineData.data, 'base64')
+          turn.pcm.push(buf)
+          turn.onChunk?.(buf)
         }
         if (m.serverContent?.turnComplete) {
           const t = turn
           turn = null
           clearTimeout(t.timer)
+          clearTimeout(t.noAudio)
           t.resolve(Buffer.concat(t.pcm))
         }
       })
@@ -105,14 +116,22 @@ module.exports = function createGemini(dir) {
         // detail: código y motivo de Google, para el registro
         const err = Object.assign(new Error(errOf(code, reason)), { detail: `cierre ${code} ${String(reason).slice(0, 100)}` })
         if (!ready) { clearTimeout(setupTimer); reject(err) }
-        if (turn) { const t = turn; turn = null; clearTimeout(t.timer); t.reject(err) }
+        if (turn) {
+          const t = turn
+          turn = null
+          clearTimeout(t.timer)
+          clearTimeout(t.noAudio)
+          if (t.silent) err.detail = `sin audio; dijo: ${said}`
+          t.reject(Object.assign(err, { partial: t.pcm.length > 0 }))
+        }
       })
       ws.on('error', () => {})   // siempre le sigue 'close'
       const session = {
-        speak(text) {
+        // onChunk recibe cada pedazo de audio en cuanto llega (para que suene al instante)
+        speak(text, onChunk) {
           return new Promise((res, rej) => {
             if (closed) return rej(new Error('network'))
-            turn = { pcm: [], resolve: res, reject: rej, timer: setTimeout(() => ws.terminate(), 30000) }
+            turn = { pcm: [], onChunk, resolve: res, reject: rej, timer: setTimeout(() => ws.terminate(), 30000) }
             ws.send(JSON.stringify({ clientContent: { turns: [{ role: 'user', parts: [{ text }] }], turnComplete: true } }))
           })
         },
@@ -171,10 +190,9 @@ module.exports = function createGemini(dir) {
   // - cortó el final: se genera sólo lo que faltó y se pega
   // - salió distinta (improvisó, se brincó algo, dijo acotaciones): se genera otra vez
   // Hasta 3 intentos; si ninguno sale bien, lanza error y el renderer usa Dalia.
-  // fast: alguien está esperando (petición, inicio, cambio de vibra): un solo intento y sin
-  // completar finales cortados; si no sale bien, el renderer usa Dalia de inmediato
-  async function liveSay(text, fast = false) {
-    const attempts = fast ? 1 : 3
+  // Se usa para frases que se preparan con calma (el siguiente bloque).
+  async function liveSay(text) {
+    const attempts = 3
     for (let attempt = 1; attempt <= attempts; attempt++) {
       let session = null
       try {
@@ -184,7 +202,7 @@ module.exports = function createGemini(dir) {
         await sleep(1200)   // la transcripción llega un poco después que el audio
         let said = session.said()
         session.close()
-        const tail = fast ? null : missingTail(text, said)
+        const tail = missingTail(text, said)
         if (tail) {
           log('completando', `faltó: ${tail}`, text)
           const s2 = await openLiveRetry(tail)
@@ -215,13 +233,61 @@ module.exports = function createGemini(dir) {
 
   // Frase → archivo de audio verificado. Se guarda en caché: lo que ya se dijo una vez no
   // gasta otra vez (los "¡Va!" y "¡Sale!" de respuesta rápida salen de aquí al instante).
-  async function say(text, fast = false) {
-    const file = path.join(VOICE_DIR, crypto.createHash('sha1').update(VOICE + VOICE_VERSION + text).digest('hex') + '.wav')
+  const fileFor = text => path.join(VOICE_DIR, crypto.createHash('sha1').update(VOICE + VOICE_VERSION + text).digest('hex') + '.wav')
+
+  async function say(text) {
+    const file = fileFor(text)
     if (fs.existsSync(file)) return file
-    const wav = await liveSay(text, fast)
+    const wav = await liveSay(text)
     fs.mkdirSync(VOICE_DIR, { recursive: true })
     fs.writeFileSync(file, wav)
     return file
+  }
+
+  // Para cuando alguien está esperando: el audio se manda a onChunk en cuanto llega, así Nat
+  // empieza a hablar en ~2 s. Un solo intento (si Google no manda audio, lanza error sin haber
+  // sonado nada y el renderer usa Dalia, que ya tiene lista). Si cortó el final, lo que faltó
+  // se genera y se encadena también en vivo. Se resuelve con { file } si ya estaba en caché.
+  async function sayNow(text, onChunk) {
+    const file = fileFor(text)
+    if (fs.existsSync(file)) return { file }
+    const session = await openLive(text)
+    let emitted = false
+    try {
+      let buf = await session.speak(ON_AIR, b => { emitted = true; onChunk(b) })
+      if (!buf.length) throw Object.assign(new Error('network'), { detail: `sin audio; dijo: ${session.said()}` })
+      await sleep(1200)   // la transcripción llega un poco después que el audio
+      let said = session.said()
+      session.close()
+      const tail = missingTail(text, said)
+      if (tail) {
+        log('completando', `faltó: ${tail}`, text)
+        const gap = Buffer.alloc(Math.round(24000 * 0.15) * 2)
+        onChunk(gap)
+        const s2 = await openLive(tail)
+        try {
+          const more = await s2.speak(ON_AIR, onChunk)
+          await sleep(1200)
+          buf = Buffer.concat([buf, gap, more])
+          said += ' ' + s2.said()
+        } finally {
+          s2.close()
+        }
+      }
+      // Sólo se guarda si dijo exactamente el texto (así la próxima vez sale de la caché)
+      if (faithful(text, said)) {
+        fs.mkdirSync(VOICE_DIR, { recursive: true })
+        fs.writeFileSync(file, pcmToWav(buf, 24000))
+      } else {
+        log('distinta', `en vivo, dijo: ${said}`, text)
+      }
+      return {}
+    } catch (e) {
+      log('falló', `en vivo: ${e.message} ${e.detail || ''}`, text)
+      throw Object.assign(e, { partial: emitted })
+    } finally {
+      session.close()
+    }
   }
 
   // ¿Ya está generada y guardada esta frase?
@@ -259,7 +325,7 @@ module.exports = function createGemini(dir) {
       return { ok: true }
     },
 
-    say, think, cached,
+    say, sayNow, think, cached,
   }
 }
 

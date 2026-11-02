@@ -1965,17 +1965,10 @@ async function djLine(kind, block) {
   return templateLine(kind, f)
 }
 
-// Texto → archivo de voz. Laomedeia (Gemini), generada completa y verificada antes de
-// sonar; si no sale bien, Dalia (Edge, sin límite). Sin internet, la voz de Windows.
-// fast: alguien está esperando. Las dos voces se generan a la vez: si la de Nat sale bien
-// antes de 10 s se usa; si no, Dalia ya está lista y no hay que esperar otra vez.
-async function djVoice(text, fast = false) {
-  if (dj.ai && fast) {
-    const dalia = api.djSay(text, 'dalia')
-    const r = await Promise.race([api.djSay(text, 'gemini', true), new Promise(res => setTimeout(() => res({}), 10000))])
-    if (r.ok) return r.ok
-    return (await dalia).ok || null
-  }
+// Texto → archivo de voz para frases que se preparan con calma (el siguiente bloque):
+// Laomedeia (Gemini) generada completa y verificada; si no sale bien, Dalia (Edge, sin
+// límite). Sin internet, la voz de Windows. Cuando alguien espera se usa speakLive().
+async function djVoice(text) {
   if (dj.ai) {
     const r = await api.djSay(text, 'gemini')
     if (r.ok) return r.ok
@@ -2064,6 +2057,83 @@ async function playAck() {
   if (r.ok) await speak('', r.ok, null, { quiet: true })
 }
 
+// ── Voz en vivo: los pedazos de PCM (16 bits, 24 kHz) se encolan en Web Audio en cuanto
+// llegan, así Nat empieza a hablar ~2 s después en lugar de esperar todo el audio.
+const voiceOut = audioCtx.createGain()   // la voz no pasa por el volumen/analizador de la música
+voiceOut.connect(audioCtx.destination)
+const voiceStreams = new Map()
+let streamSeq = 0
+let activeStream = null
+api.onDjChunk((id, b64) => voiceStreams.get(id)?.(b64))
+
+function streamVoice(id, { onFirst, onNearEnd }) {
+  let next = 0, playing = 0, ended = false, near = false, resolveDone
+  const sources = []
+  const done = new Promise(r => { resolveDone = r })
+  const check = () => {
+    if (ended && !near && next - audioCtx.currentTime <= 1.5) { near = true; onNearEnd?.() }
+    if (ended && playing === 0) resolveDone()
+  }
+  const timer = setInterval(check, 100)
+  voiceStreams.set(id, b64 => {
+    const bin = atob(b64), n = bin.length >> 1
+    if (!n) return
+    const buf = audioCtx.createBuffer(1, n, 24000), ch = buf.getChannelData(0)
+    for (let i = 0; i < n; i++) {
+      let v = bin.charCodeAt(2 * i) | (bin.charCodeAt(2 * i + 1) << 8)
+      if (v >= 32768) v -= 65536
+      ch[i] = v / 32768
+    }
+    if (!next) { if (audioCtx.state === 'suspended') audioCtx.resume(); onFirst?.() }
+    const src = audioCtx.createBufferSource()
+    src.buffer = buf
+    src.connect(voiceOut)
+    // Colchón de 0.3 s al inicio por si algún pedazo llega tarde
+    const t = Math.max(next, audioCtx.currentTime + (next ? 0.02 : 0.3))
+    src.start(t)
+    next = t + buf.duration
+    playing++
+    sources.push(src)
+    src.onended = () => { playing--; check() }
+  })
+  const stop = () => { clearInterval(timer); voiceStreams.delete(id) }
+  return {
+    started: () => next > 0,
+    end: () => { ended = true; check(); return done.finally(stop) },
+    cancel: () => { for (const s of sources) try { s.stop() } catch {} ; stop(); resolveDone() },
+  }
+}
+
+// Dice `text` al instante con la voz de Nat (en vivo). Dalia se genera en paralelo: si Google
+// no manda audio, entra ella sin otra espera. Sin Gemini, directo a la voz de respaldo.
+async function speakLive(text, onNearEnd) {
+  if (!dj.ai) return speak(text, await djVoice(text), onNearEnd)
+  const dalia = api.djSay(text, 'dalia')
+  const id = ++streamSeq
+  let near = false
+  const nearEnd = () => { if (!near) { near = true; onNearEnd?.() } }
+  const player = streamVoice(id, {
+    onFirst: () => { dj.thinking = false; dj.speaking = true; duck(true); djSay(text) },
+    onNearEnd: nearEnd,
+  })
+  activeStream = player
+  const r = await api.djSayNow(text, id)
+  if (activeStream !== player) return   // se detuvo el DJ mientras hablaba
+  activeStream = null
+  if (player.started()) {
+    await player.end()
+    nearEnd()
+    dj.speaking = false
+    duck(false)
+    renderDjPanel()
+    return
+  }
+  player.cancel()
+  dj.thinking = false
+  // No sonó nada: estaba en caché (archivo) o Google no mandó audio (Dalia ya está lista)
+  return speak(text, r.ok?.file || (await dalia).ok || null, onNearEnd)
+}
+
 function djSay(text) { dj.log.push({ who: 'dj', text }); dj.log = dj.log.slice(-30); renderDjPanel() }
 
 // Pone un bloque como en la radio: primero habla Nat (lo que ya sonaba sigue mientras
@@ -2078,17 +2148,17 @@ async function djPlay(block, prepared, ack) {
   dj.thinking = !ready
   renderDjPanel()
   const line = prepared?.line ?? await djLine(block.kind, block)
-  const file = ready ? prepared.file : await djVoice(line, true)
   if (ack) await ack
-  dj.thinking = false
-  if (!dj.on) { renderDjPanel(); return }
+  if (!dj.on) { dj.thinking = false; renderDjPanel(); return }
   let started = false
   const startMusic = () => {
     if (started || !dj.on) return
     started = true
     playList(block.songs, 0, DJ_CTX)   // entra bajita (la voz la tiene agachada) y sube al terminar
   }
-  await speak(line, file, startMusic)
+  // Preparada (siguiente bloque): suena de inmediato. Si no, en vivo.
+  if (ready) { dj.thinking = false; await speak(line, prepared.file, startMusic) }
+  else await speakLive(line, startMusic)
   startMusic()
 }
 
@@ -2119,6 +2189,8 @@ function djStop() {
   dj.vibe = null
   djAudio.pause()
   if ('speechSynthesis' in window) speechSynthesis.cancel()
+  activeStream?.cancel()
+  activeStream = null
   dj.speaking = dj.thinking = false
   duck(false)
   renderDjPanel()
@@ -2270,9 +2342,8 @@ async function djAsk(text) {
   dj.thinking = false
   if (pool.length < 3) {
     const line = 'Uy, no encontré nada así en tu música. ¿Me lo pides de otra forma?'
-    const file = await djVoice(line, true)
     await ack
-    await speak(line, file)
+    await speakLive(line)
     return
   }
   const block = { kind: 'request', vibe: { key: 'req:' + fold(plan.title || text), name: plan.title || text }, songs: buildBlock(pool, 6) }
