@@ -270,6 +270,9 @@ img { display: block; }
 .dj-ask button { width: 36px; height: 36px; border-radius: 50%; background: var(--green); color: #000; display: flex; align-items: center; justify-content: center; }
 .modal-h3 { font-size: 15px; font-weight: 700; margin: 18px 0 6px; color: var(--white); }
 .modal-h3:first-of-type { margin-top: 0; }
+.modal-text { font-family: inherit; }
+.modal-check { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 14px; color: var(--t2); cursor: pointer; }
+.modal-check input { width: 16px; height: 16px; accent-color: var(--green); }
 .modal { max-height: calc(100vh - 32px); overflow-y: auto; }
 
 /* Géneros de la canción actual */

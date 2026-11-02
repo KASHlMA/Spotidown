@@ -1906,17 +1906,23 @@ const DJ_SYSTEM =
   'Eres la voz que presenta la música en el reproductor personal del usuario, como una locutora de radio mexicana ' +
   'joven: cálida, carismática y con jerga mexicana natural (la neta, va, ¿a poco no?), sin exagerar. ' +
   'Reglas: de 1 a 2 frases y máximo 30 palabras. Se escribe "rola" (con una sola ele). NUNCA te presentes ni te nombres (no digas DJ, diyéi, "aquí tu…", ' +
-  '"soy tu…"). NO saludes salvo que te lo pidan. NUNCA digas la hora ni el día. Ve directo a la música. ' +
+  '"soy tu…"). NO saludes ni digas la hora o el día, salvo que la tarea lo pida. Ve directo a la música. ' +
   'Usa sólo los datos que te dan; no inventes canciones, artistas ni datos. Sin emojis, comillas, asteriscos ni ' +
   'listas. Háblale de tú. Varía tus frases: no empieces siempre igual.'
 
 const DJ_TASK = {
+  welcome: 'El usuario acaba de abrir la app. Salúdalo con el saludo y su nombre (si lo hay), dile la hora en palabras ' +
+           '(ej. "son las once y media"), y dile que empiezan con una playlist que le hiciste, mencionando la vibra y la ' +
+           'primera rola. Puedes usar hasta 40 palabras.',
   intro:   'Es la primera canción de la sesión: un saludo muy corto (dos o tres palabras) y presenta el bloque.',
   next:    'Haz la transición al siguiente bloque como en la radio, sin saludar.',
   switch:  'El usuario pidió cambiar de vibra. Confírmalo con buena onda y presenta el nuevo bloque, sin saludar.',
 }
 
 const DJ_TEMPLATES = {
+  welcome: [
+    '{saludo}{nombre}. Son las {hora}. Empecemos con una playlist que te hice: {vibra}, y abre {artista}.',
+  ],
   intro: [
     '¡Qué onda! Vamos a arrancar con {vibra}, y para abrir, {artista}.',
     'Va, hoy toca {vibra}. Empezamos con {cancion} de {artista}.',
@@ -1937,6 +1943,7 @@ function templateLine(kind, f) {
   return list[Math.floor(Math.random() * list.length)]
     .replace('{vibra}', f.vibra.toLowerCase()).replace('{artista}', f.primer_artista)
     .replace('{cancion}', f.primera_cancion).replace('{dia}', f.dia)
+    .replace('{saludo}', f.saludo || '¡Hola').replace('{nombre}', f.nombre ? `, ${f.nombre}` : '').replace('{hora}', f.hora || '')
 }
 
 // Lo que escribe la IA antes de pasarlo a voz: sin comillas ni asteriscos, "rola" bien escrito
@@ -1946,6 +1953,13 @@ function cleanLine(t) {
 
 async function djLine(kind, block) {
   const f = blockFacts(block)
+  if (kind === 'welcome') {
+    // Sólo en la bienvenida: saludo según la hora, nombre y hora exacta
+    const d = new Date(), h = d.getHours()
+    f.saludo = h >= 5 && h < 12 ? 'Buenos días' : h >= 12 && h < 19 ? 'Buenas tardes' : 'Buenas noches'
+    f.nombre = userName || undefined
+    f.hora = d.toLocaleTimeString('es-MX', { hour: 'numeric', minute: '2-digit', hour12: true })
+  }
   if (dj.ai) {
     const r = await api.djThink(DJ_SYSTEM, `${DJ_TASK[kind] || DJ_TASK.next}\nDatos: ${JSON.stringify(f)}`)
     if (r.ok) return cleanLine(r.ok)
@@ -1953,11 +1967,10 @@ async function djLine(kind, block) {
   return templateLine(kind, f)
 }
 
-// Texto → archivo de voz. 'laomedeia' (Gemini) sólo da 10 frases al día gratis;
-// 'dalia' (Edge) no tiene límite. Si todo falla (sin internet) se usa la voz de Windows.
-let djVoicePref = load('djVoice', 'dalia')
+// Texto → archivo de voz. Laomedeia (Gemini, por la API en vivo: sin límite diario);
+// si falla, Dalia (Edge). Si todo falla (sin internet) se usa la voz de Windows.
 async function djVoice(text) {
-  if (djVoicePref === 'laomedeia' && dj.ai && Date.now() >= dj.ttsOffUntil) {
+  if (dj.ai && Date.now() >= dj.ttsOffUntil) {
     const r = await api.djSay(text, 'gemini')
     if (r.ok) return r.ok
     if (r.error === 'quota') dj.ttsOffUntil = Date.now() + 60 * 60 * 1000
@@ -2031,13 +2044,32 @@ function newBlock(kind, exclude = []) {
   return vibe && { kind, vibe, songs: buildBlock(vibe.songs) }
 }
 
-async function djStart() {
+let userName    = load('userName', '')
+let djAutoStart = load('djAutoStart', true)
+
+async function djStart(kind = 'intro') {
   if (!allSongs.length) return
   dj.recent = []
-  const block = newBlock('intro')
+  const block = newBlock(kind)
   if (!block) { djSay('Todavía estoy conociendo tu música. Dame un ratito a que termine de clasificarla.'); return }
   if (rightMode !== 'dj') setRight('dj')
   await djPlay(block)
+}
+
+// Al abrir la app: en cuanto la biblioteca y sus géneros están cargados, el DJ te recibe.
+// Sólo una vez por sesión y sólo si no has puesto otra cosa antes.
+let welcomed = false
+function maybeWelcome() {
+  if (welcomed || !djAutoStart) return
+  welcomed = true
+  const t0 = Date.now()
+  const wait = setInterval(() => {
+    if (currentSong) { clearInterval(wait); return }
+    if (getGenreGroups().genres.length || Date.now() - t0 > 15000) {
+      clearInterval(wait)
+      if (allSongs.length) djStart('welcome')
+    }
+  }, 300)
 }
 
 function djStop() {
@@ -2567,6 +2599,7 @@ async function scanLibrary() {
   setStatus(`${allSongs.length} canciones`)
   analyzeAudio(files)
   tagLibrary()
+  maybeWelcome()
 }
 
 function refreshLibraryViews() {
@@ -2697,14 +2730,20 @@ function openSettings() {
   $('settings').hidden = false
   $('lfm-msg').textContent = lfm.ready ? 'Last.fm ya está conectado. Pega otra key sólo si quieres cambiarla.' : ''
   $('gem-msg').textContent = dj.ai ? 'Gemini ya está conectado. Pega otra key sólo si quieres cambiarla.' : ''
+  $('dj-name').value = userName
+  $('dj-auto').checked = djAutoStart
   $('lfm-msg').className = $('gem-msg').className = 'modal-msg'
   $('lfm-key').value = $('gem-key').value = ''
   $('lfm-key').focus()
 }
 function closeSettings() { $('settings').hidden = true }
 
-// Guarda sólo las keys que se escribieron; cada una se comprueba antes de aceptarla
+// Guarda nombre y bienvenida, y sólo las keys que se escribieron (cada una se comprueba antes)
 async function saveSettings() {
+  userName = $('dj-name').value.trim()
+  djAutoStart = $('dj-auto').checked
+  save('userName', userName)
+  save('djAutoStart', djAutoStart)
   const lk = $('lfm-key').value.trim(), gk = $('gem-key').value.trim()
   if (!lk && !gk) { closeSettings(); return }
   $('lfm-save').disabled = true

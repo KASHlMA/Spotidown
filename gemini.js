@@ -1,11 +1,17 @@
-const fs     = require('fs')
-const path   = require('path')
-const crypto = require('crypto')
+const fs        = require('fs')
+const path      = require('path')
+const crypto    = require('crypto')
+const WebSocket = require('ws')
 
 const API        = 'https://generativelanguage.googleapis.com/v1beta/models/'
+const LIVE_URL   = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent'
 const TEXT_MODEL = 'gemini-flash-lite-latest'
-const TTS_MODEL  = 'gemini-3.8-flash-tts'
+const TTS_MODEL  = 'gemini-3.8-flash-tts'   // nivel gratis: 10 frases al día
+const LIVE_MODEL = 'gemini-3.8-live'        // nivel gratis: sin límite diario; dice el texto tal cual
 const VOICE      = 'Laomedeia'
+const LIVE_SYSTEM = 'Eres una locutora de radio mexicana joven, cálida y carismática. Tu único trabajo es decir EN VOZ ALTA, ' +
+  'palabra por palabra, el texto que te mandan, actuándolo con emoción, sonrisas en la voz, pausas naturales y acento ' +
+  'mexicano relajado. No agregues, quites ni cambies nada. No respondas ni comentes: sólo dilo.'
 const TTS_GAP_MS = 21000   // el nivel gratis de voz permite ~3 frases por minuto
 // Estilo de la voz del DJ (la instrucción se lee, el texto se actúa)
 const VOICE_STYLE = 'Habla como una locutora de radio mexicana joven, cálida y carismática, platicando con un amigo: ' +
@@ -46,12 +52,50 @@ module.exports = function createGemini(dir) {
     return j
   }
 
+  // Voz por la API en vivo: se abre una sesión, se manda el texto y se junta el audio que regresa
+  function liveSpeak(text) {
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket(`${LIVE_URL}?key=${encodeURIComponent(settings.key)}`)
+      const pcm = []
+      const fail = err => { clearTimeout(timer); try { ws.terminate() } catch {} reject(new Error(err)) }
+      const timer = setTimeout(() => fail('network'), 60000)
+      ws.on('open', () => ws.send(JSON.stringify({ setup: {
+        model: 'models/' + LIVE_MODEL,
+        generationConfig: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICE } } } },
+        systemInstruction: { parts: [{ text: LIVE_SYSTEM }] },
+      } })))
+      ws.on('message', raw => {
+        let m
+        try { m = JSON.parse(raw) } catch { return }
+        if (m.setupComplete) {
+          ws.send(JSON.stringify({ clientContent: { turns: [{ role: 'user', parts: [{ text }] }], turnComplete: true } }))
+          return
+        }
+        for (const p of m.serverContent?.modelTurn?.parts || []) if (p.inlineData) pcm.push(Buffer.from(p.inlineData.data, 'base64'))
+        if (m.serverContent?.turnComplete) {
+          clearTimeout(timer)
+          ws.close()
+          pcm.length ? resolve(pcmToWav(Buffer.concat(pcm), 24000)) : reject(new Error('network'))
+        }
+      })
+      ws.on('close', code => { if (code === 1008 || code === 1011) fail(code === 1008 ? 'invalid-key' : 'quota') })
+      ws.on('error', () => fail('network'))
+    })
+  }
+
   // Frase → archivo de audio. Se guarda en caché: lo que ya se dijo una vez no gasta otra vez.
+  // Primero la API en vivo (sin límite diario); si falla, el modelo de voz normal (10 al día).
   function say(text) {
     const file = path.join(VOICE_DIR, crypto.createHash('sha1').update(VOICE + VOICE_STYLE + text).digest('hex') + '.wav')
     if (fs.existsSync(file)) return Promise.resolve(file)
     const run = ttsChain.then(async () => {
       if (fs.existsSync(file)) return file
+      try {
+        const wav = await liveSpeak(text)
+        fs.mkdirSync(VOICE_DIR, { recursive: true })
+        fs.writeFileSync(file, wav)
+        return file
+      } catch {}
       const wait = lastTts + TTS_GAP_MS - Date.now()
       if (wait > 0) await sleep(wait)
       lastTts = Date.now()
