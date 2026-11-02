@@ -2259,7 +2259,7 @@ async function djStart() {
   dj.used = new Set()
   const kind = welcomed ? 'intro' : 'welcome'
   welcomed = true
-  const ready = kind === 'welcome' && welcomeReady && Date.now() - welcomeReady.at < 10 * 60 * 1000 ? welcomeReady : null
+  const ready = kind === 'welcome' && welcomeReady && Date.now() - welcomeReady.at < 2 * 60 * 1000 ? welcomeReady : null
   welcomeReady = null
   // Si el saludo completo no alcanzó a grabarse, suena al instante uno de los guardados y lo
   // demás (la hora y la playlist) se prepara en vivo mientras lo dice
@@ -2405,7 +2405,8 @@ async function warmGreetings() {
 }
 
 // El saludo se graba en segundo plano al abrir la app (con calma y verificado), así al
-// darle a DJ Nat suena al instante con su voz. Vale 10 min porque dice la hora.
+// darle a DJ Nat suena al instante con su voz. Vale 2 min porque dice la hora (si no, se usa
+// un saludo guardado y la hora se dice en vivo).
 let welcomeReady = null, welcomePrep = null
 function prepareWelcome() {
   if (welcomed || welcomeReady || welcomePrep || !allSongs.length) return
@@ -2431,7 +2432,8 @@ function prepareAlt() {
   if (!dj.on || !dj.ai || dj.alt || dj.altPrep) return
   dj.altPrep = (async () => {
     await new Promise(r => setTimeout(r, 20000))   // deja respirar a Google (sesiones por minuto)
-    if (!dj.on) return
+    // Si al siguiente le toca decir la hora no se prepara: grabada de antes, la hora salía vieja
+    if (!dj.on || dj.sinceHello >= 2) return
     const block = newBlock('switch', dj.vibe ? [dj.vibe.key] : [])
     if (!block) return
     const line = await djLine('switch', block)
@@ -2457,6 +2459,8 @@ function djStop() {
 // Mientras suena la última canción del bloque se prepara el siguiente (frase + voz)
 function djPrepare() {
   if (dj.next || dj.prep) return dj.prep
+  // Si al siguiente bloque le toca decir la hora, se hace en vivo al momento (no con la de antes)
+  if (dj.sinceHello >= 2) return null
   dj.prep = (async () => {
     const block = await continueBlock()
     if (!block) return
@@ -2493,9 +2497,7 @@ function djSwitch() {
   return djChange(async () => {
     const alt = dj.alt
     dj.alt = null
-    // Si ya preparada dice la hora, sólo sirve si es reciente
-    const fresh = !alt?.block.timed || Date.now() - alt.block.timed < 5 * 60 * 1000
-    if (alt && fresh && alt.block.vibe.key !== dj.vibe?.key) { await djPlay(alt.block, { line: alt.line, file: alt.file }); return }
+    if (alt && alt.block.vibe.key !== dj.vibe?.key) { await djPlay(alt.block, { line: alt.line, file: alt.file }); return }
     const block = newBlock('switch', dj.vibe ? [dj.vibe.key] : [])
     if (block) await djPlay(block)
   })
