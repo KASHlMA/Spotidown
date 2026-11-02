@@ -2106,7 +2106,7 @@ function cleanLine(t) {
 
 const clockText = t => new Date(t).toLocaleTimeString('es-MX', { hour: 'numeric', minute: '2-digit', hour12: true })
 
-async function djLine(kind, block) {
+async function djLine(kind, block, { noTime = false } = {}) {
   const f = blockFacts(block)
   const ph = partOfDay(new Date(Date.now() + (block.ahead || 0)).getHours())
   f.momento_del_dia = ph === 'manana' ? 'mañana' : ph
@@ -2127,7 +2127,7 @@ async function djLine(kind, block) {
   // Cada 3 bloques (contando desde el saludo) dice tu nombre y la hora, como en la radio
   let task = DJ_TASK[kind] || DJ_TASK.next
   const transition = ['next', 'switch', 'continue', 'drift'].includes(kind)
-  if (transition && dj.sinceHello >= 2) {
+  if (transition && dj.sinceHello >= 2 && !noTime) {
     f.nombre = userName || undefined
     // ahead: se prepara unos segundos antes de que acabe la canción; la hora es la de cuando hable
     f.hora = block.hora = clockText(Date.now() + (block.ahead || 0))
@@ -2519,8 +2519,24 @@ async function cachedGreeting() {
 // Graba los que falten, empezando por los de este momento del día, espaciados para no
 // chocar con el límite de sesiones por minuto de Google
 let greetWarming = false
+// Lo que dice al instante mientras arma la respuesta (grabado una vez, como los saludos)
+const DJ_ACKS = {
+  ask: ['¡Va! Déjame ver qué tienes por aquí.', '¡Sale! Ahorita te lo busco.', '¡Uy, buena! Dame un segundito.',
+        '¡Órale, va! Deja te armo algo.', '¡Claro que sí! Déjame buscarte unas buenas.', '¡A la orden! Ya te busco algo.'],
+  switch: ['¡Sale, cambiamos de rollo!', '¡Va, otra vibra!', '¡Órale, a cambiarle!', '¡Va que va, cambiamos!'],
+}
+async function cachedAck(kind) {
+  if (!dj.ai) return null
+  const ready = []
+  for (const t of DJ_ACKS[kind]) if (await api.djCached(t)) ready.push(t)
+  if (!ready.length) return null
+  const text = ready[Math.floor(Math.random() * ready.length)]
+  const r = await api.djSay(text, 'gemini')   // en caché: al instante
+  return r.ok ? { text, file: r.ok } : null
+}
+
 // Todos los saludos guardados; los de este momento (y los especiales de hoy) primero
-const allGreetings = () => [...new Set([...greetingsNow(), ...[...Object.values(GREETINGS).flat(),
+const allGreetings = () => [...new Set([...greetingsNow(), ...Object.values(DJ_ACKS).flat(), ...[...Object.values(GREETINGS).flat(),
   ...Object.values(GREETINGS_WEATHER).flat(), ...Object.values(GREETINGS_DAY).flatMap(d => Object.values(d).flat())].map(greetingText)])]
 
 async function warmGreetings() {
@@ -2571,10 +2587,10 @@ function prepareAlt() {
   dj.altPrep = (async () => {
     await new Promise(r => setTimeout(r, 20000))   // deja respirar a Google (sesiones por minuto)
     // Si al siguiente le toca decir la hora no se prepara: grabada de antes, la hora salía vieja
-    if (!dj.on || dj.sinceHello >= 2 || Date.now() < dj.quietUntil) return
+    if (!dj.on || Date.now() < dj.quietUntil) return
     const block = newBlock('switch', dj.vibe ? [dj.vibe.key] : [])
     if (!block) return
-    const line = await djLine('switch', block)
+    const line = await djLine('switch', block, { noTime: true })
     const r = await api.djSay(line, 'gemini')
     if (r.ok && dj.on) dj.alt = { block, line, file: r.ok }
   })().finally(() => { dj.altPrep = null })
@@ -2606,7 +2622,12 @@ function djPrepare(ahead = 0) {
     block.speakAt = Date.now() + ahead
     const line = await djLine(block.kind, block)
     const file = await djVoice(line)
-    if (dj.on) dj.next = { block, line, file }
+    let plain = null
+    if (block.hora) {
+      const pl = await djLine(block.kind, { ...block, hora: undefined, timed: undefined }, { noTime: true })
+      plain = { line: pl, file: await djVoice(pl) }
+    }
+    if (dj.on) dj.next = { block, line, file, plain }
   })().finally(() => { dj.prep = null })
   return dj.prep
 }
@@ -2636,13 +2657,14 @@ function djNextBlock() {
       renderDjPanel()
       await dj.prep
     }
-    // La hora ya no cuadra (te brincaste canciones): mismas rolas, la frase se dice en vivo
+    // La hora ya no cuadra (te brincaste canciones): mismas rolas con la frase sin hora (ya
+    // grabada, al instante); si no hay, se dice en vivo con la hora de ahorita
     if (staleNext()) {
-      const { block } = dj.next
+      const { block, plain } = dj.next
       dj.next = null
       block.ahead = 0
       block.timed = block.hora = undefined
-      await djPlay(block)
+      await djPlay(block, plain || undefined)
       return
     }
     if (dj.next) { const { block, line, file } = dj.next; await djPlay(block, { line, file }); return }
@@ -2657,7 +2679,9 @@ function djSwitch() {
     dj.alt = null
     if (alt && alt.block.vibe.key !== dj.vibe?.key) { await djPlay(alt.block, { line: alt.line, file: alt.file }); return }
     const block = newBlock('switch', dj.vibe ? [dj.vibe.key] : [])
-    if (block) await djPlay(block)
+    if (!block) return
+    const ack = await cachedAck('switch')
+    await djPlay(block, undefined, ack ? speak(ack.text, ack.file) : undefined)
   })
 }
 
@@ -2797,6 +2821,9 @@ async function djAsk(text) {
   api.djChatLog('Tú', text)
   dj.thinking = true
   renderDjPanel()
+  // Mientras arma la respuesta dice algo corto ya grabado ("¡Sale! Ahorita te lo busco")
+  const ack = await cachedAck('ask')
+  const after = ack ? speak(ack.text, ack.file) : undefined
   let plan = null
   if (dj.ai) {
     const r = await api.djThink(
@@ -2817,7 +2844,7 @@ async function djAsk(text) {
   dj.thinking = false
   if (!wanted.length && pool.length < 3) {
     const line = 'Uy, no encontré nada así en tu música. ¿Me lo pides de otra forma?'
-    await speakLive(line)
+    await speakLive(line, undefined, after)
     return
   }
   // "tipo Cachirula o Emi Blue": abre una rola de cada uno (de las que más escuchas) y luego parecidas
@@ -2836,7 +2863,7 @@ async function djAsk(text) {
   const title = cleanTitle(first.title)
   if (!fold(line).includes(fold(title))) line += ` Arrancamos con ${title}${artist ? ` de ${artist}` : ''}.`
   if (rightMode !== 'dj') setRight('dj')
-  await djPlay(block, { line })
+  await djPlay(block, { line }, after)
 }
 
 // ── Panel del DJ ──────────────────────────────────────────────────────────────
