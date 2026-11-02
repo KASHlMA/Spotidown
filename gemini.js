@@ -232,7 +232,7 @@ module.exports = function createGemini(dir) {
   }
 
   // Frase → archivo de audio verificado. Se guarda en caché: lo que ya se dijo una vez no
-  // gasta otra vez (los "¡Va!" y "¡Sale!" de respuesta rápida salen de aquí al instante).
+  // gasta otra vez.
   const fileFor = text => path.join(VOICE_DIR, crypto.createHash('sha1').update(VOICE + VOICE_VERSION + text).digest('hex') + '.wav')
 
   async function say(text) {
@@ -290,9 +290,6 @@ module.exports = function createGemini(dir) {
     }
   }
 
-  // ¿Ya está generada y guardada esta frase?
-  const cached = text => fs.existsSync(path.join(VOICE_DIR, crypto.createHash('sha1').update(VOICE + VOICE_VERSION + text).digest('hex') + '.wav'))
-
   // Texto (o JSON si se pasa un schema)
   async function think(system, prompt, schema) {
     const j = await request(TEXT_MODEL, {
@@ -325,7 +322,7 @@ module.exports = function createGemini(dir) {
       return { ok: true }
     },
 
-    say, sayNow, think, cached,
+    say, sayNow, think,
   }
 }
 

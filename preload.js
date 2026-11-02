@@ -17,7 +17,6 @@ contextBridge.exposeInMainWorld('api', {
   djSay:            (text, engine) => ipcRenderer.invoke('dj-say', text, engine),
   djSayNow:         (text, id) => ipcRenderer.invoke('dj-say-now', text, id),
   onDjChunk:        (cb)      => ipcRenderer.on('dj-chunk', (_, id, b64) => cb(id, b64)),
-  djCached:         (text)    => ipcRenderer.invoke('dj-cached', text),
   djThink:          (sys, prompt, schema) => ipcRenderer.invoke('dj-think', sys, prompt, schema),
   audioCached:      ()        => ipcRenderer.invoke('audio-cached'),
   audioAnalyze:     (files)   => ipcRenderer.invoke('audio-analyze', files),

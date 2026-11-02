@@ -1814,7 +1814,7 @@ function weightedPick(items, weight) {
 // frases armadas y palabras clave. La voz es Gemini (Laomedeia) o la de Windows.
 const DJ_CTX = { key: 'dj:', title: 'DJ Nat' }
 const dj = {
-  on: false, ai: false, vibe: null, recent: [], next: null, prep: null,
+  on: false, ai: false, vibe: null, recent: [], next: null, prep: null, alt: null, altPrep: null,
   log: [], thinking: false, speaking: false,
 }
 const DAYS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado']
@@ -1987,9 +1987,8 @@ function duck(on) {
 }
 
 const djAudio = $('dj-voice')
-// onNearEnd: se llama cuando a la voz le falta ~1.5 s (ahí entra la música nueva).
-// quiet: no se escribe en el chat (las respuestas rápidas "¡Va!")
-function speak(text, file, onNearEnd, { quiet = false } = {}) {
+// onNearEnd: se llama cuando a la voz le falta ~1.5 s (ahí entra la música nueva)
+function speak(text, file, onNearEnd) {
   return new Promise(resolve => {
     let done = false, near = false
     const nearEnd = () => { if (!near) { near = true; onNearEnd?.() } }
@@ -2007,8 +2006,7 @@ function speak(text, file, onNearEnd, { quiet = false } = {}) {
     const guard = setTimeout(finish, 45000)
     dj.speaking = true
     duck(true)
-    if (quiet) renderDjPanel()
-    else djSay(text)   // el texto aparece cuando empieza a hablar, no antes
+    djSay(text)   // el texto aparece cuando empieza a hablar, no antes
     if (file) {
       djAudio.src = toFileUrl(file)
       djAudio.onended = djAudio.onerror = finish
@@ -2025,36 +2023,6 @@ function speak(text, file, onNearEnd, { quiet = false } = {}) {
       finish()
     }
   })
-}
-
-// ── Respuestas rápidas: cuando le pides algo, Nat contesta al instante con una de estas
-// (ya grabadas) mientras genera y verifica la frase completa, como el DJ de Spotify.
-// Frases completas: con una sola palabra ("¡Va!") la voz se inventaba un programa de radio
-const ACKS = [
-  '¡Va! Dame un segundito y te la pongo.',
-  '¡Sale! Ahorita te busco algo bueno.',
-  '¡Órale, va! Déjame ver qué tengo por aquí.',
-  '¡Claro que sí! Ya te lo estoy buscando.',
-]
-let acksWarming = false
-// Las graba una sola vez (luego quedan en caché para siempre), espaciadas para no chocar
-// con el límite de sesiones por minuto de Google
-async function warmAcks() {
-  if (acksWarming || !dj.ai) return
-  acksWarming = true
-  for (const a of ACKS) {
-    if (await api.djCached(a)) continue
-    await api.djSay(a, 'gemini')
-    await new Promise(r => setTimeout(r, 25000))
-  }
-}
-async function playAck() {
-  if (!dj.ai) return
-  const ready = []
-  for (const a of ACKS) if (await api.djCached(a)) ready.push(a)
-  if (!ready.length) return
-  const r = await api.djSay(ready[Math.floor(Math.random() * ready.length)], 'gemini')   // en caché: al instante
-  if (r.ok) await speak('', r.ok, null, { quiet: true })
 }
 
 // ── Voz en vivo: los pedazos de PCM (16 bits, 24 kHz) se encolan en Web Audio en cuanto
@@ -2117,7 +2085,9 @@ async function speakLive(text, onNearEnd) {
     onNearEnd: nearEnd,
   })
   activeStream = player
-  const r = await api.djSayNow(text, id)
+  let r = await api.djSayNow(text, id)
+  // Google no mandó audio (no sonó nada): un intento más con la voz de Nat antes de Dalia
+  if (activeStream === player && !player.started() && r.error && !r.partial) r = await api.djSayNow(text, id)
   if (activeStream !== player) return   // se detuvo el DJ mientras hablaba
   activeStream = null
   if (player.started()) {
@@ -2138,8 +2108,7 @@ function djSay(text) { dj.log.push({ who: 'dj', text }); dj.log = dj.log.slice(-
 
 // Pone un bloque como en la radio: primero habla Nat (lo que ya sonaba sigue mientras
 // prepara qué decir) y cuando está por terminar entra la primera canción desde abajo.
-// ack: respuesta rápida que está sonando; la frase completa espera a que termine.
-async function djPlay(block, prepared, ack) {
+async function djPlay(block, prepared) {
   dj.on = true
   dj.vibe = block.vibe
   dj.recent = [block.vibe.key, ...dj.recent.filter(k => k !== block.vibe.key)].slice(0, 3)
@@ -2148,7 +2117,6 @@ async function djPlay(block, prepared, ack) {
   dj.thinking = !ready
   renderDjPanel()
   const line = prepared?.line ?? await djLine(block.kind, block)
-  if (ack) await ack
   if (!dj.on) { dj.thinking = false; renderDjPanel(); return }
   let started = false
   const startMusic = () => {
@@ -2160,6 +2128,7 @@ async function djPlay(block, prepared, ack) {
   if (ready) { dj.thinking = false; await speak(line, prepared.file, startMusic) }
   else await speakLive(line, startMusic)
   startMusic()
+  prepareAlt()
 }
 
 function newBlock(kind, exclude = []) {
@@ -2176,16 +2145,50 @@ async function djStart() {
   dj.recent = []
   const kind = welcomed ? 'intro' : 'welcome'
   welcomed = true
-  const block = newBlock(kind)
+  const ready = kind === 'welcome' && welcomeReady && Date.now() - welcomeReady.at < 10 * 60 * 1000 ? welcomeReady : null
+  welcomeReady = null
+  const block = ready?.block || newBlock(kind)
   if (!block) { djSay('Todavía estoy conociendo tu música. Dame un ratito a que termine de clasificarla.'); return }
   if (rightMode !== 'dj') setRight('dj')
-  await djPlay(block)
-  warmAcks()
+  await djPlay(block, ready && { line: ready.line, file: ready.file })
+}
+
+// El saludo se graba en segundo plano al abrir la app (con calma y verificado), así al
+// darle a DJ Nat suena al instante con su voz. Vale 10 min porque dice la hora.
+let welcomeReady = null, welcomePrep = null
+function prepareWelcome() {
+  if (welcomed || welcomeReady || welcomePrep || !allSongs.length) return
+  welcomePrep = (async () => {
+    for (let i = 0; i < 50 && !getGenreGroups().genres.length; i++) await new Promise(r => setTimeout(r, 300))
+    if (!(await api.geminiStatus()).hasKey || welcomed) return
+    dj.ai = true
+    const block = newBlock('welcome')
+    if (!block) return
+    const line = await djLine('welcome', block)
+    const r = await api.djSay(line, 'gemini')
+    if (r.ok && !welcomed) welcomeReady = { block, line, file: r.ok, at: Date.now() }
+  })().finally(() => { welcomePrep = null })
+}
+
+// "Cambiar vibra" preparado de antemano: mientras suena la música, Nat ya tiene grabada la
+// siguiente vibra con su frase. Sólo se guarda si salió con su voz (si no, se hace en vivo).
+function prepareAlt() {
+  if (!dj.on || !dj.ai || dj.alt || dj.altPrep) return
+  dj.altPrep = (async () => {
+    await new Promise(r => setTimeout(r, 20000))   // deja respirar a Google (sesiones por minuto)
+    if (!dj.on) return
+    const block = newBlock('switch', dj.vibe ? [dj.vibe.key] : [])
+    if (!block) return
+    const line = await djLine('switch', block)
+    const r = await api.djSay(line, 'gemini')
+    if (r.ok && dj.on) dj.alt = { block, line, file: r.ok }
+  })().finally(() => { dj.altPrep = null })
 }
 
 function djStop() {
   dj.on = false
   dj.next = null
+  dj.alt = null
   dj.vibe = null
   djAudio.pause()
   if ('speechSynthesis' in window) speechSynthesis.cancel()
@@ -2233,8 +2236,11 @@ function djNextBlock() {
 
 function djSwitch() {
   return djChange(async () => {
+    const alt = dj.alt
+    dj.alt = null
+    if (alt && alt.block.vibe.key !== dj.vibe?.key) { await djPlay(alt.block, { line: alt.line, file: alt.file }); return }
     const block = newBlock('switch', dj.vibe ? [dj.vibe.key] : [])
-    if (block) await djPlay(block, undefined, playAck())
+    if (block) await djPlay(block)
   })
 }
 
@@ -2324,7 +2330,6 @@ async function djAsk(text) {
   text = text.trim()
   if (!text) return
   dj.log.push({ who: 'yo', text })
-  const ack = playAck()
   dj.thinking = true
   renderDjPanel()
   let plan = null
@@ -2342,7 +2347,6 @@ async function djAsk(text) {
   dj.thinking = false
   if (pool.length < 3) {
     const line = 'Uy, no encontré nada así en tu música. ¿Me lo pides de otra forma?'
-    await ack
     await speakLive(line)
     return
   }
@@ -2354,7 +2358,7 @@ async function djAsk(text) {
   const title = cleanTitle(first.title)
   if (!fold(line).includes(fold(title))) line += ` Arrancamos con ${title}${artist ? ` de ${artist}` : ''}.`
   if (rightMode !== 'dj') setRight('dj')
-  await djPlay(block, { line }, ack)
+  await djPlay(block, { line })
 }
 
 // ── Panel del DJ ──────────────────────────────────────────────────────────────
@@ -2735,6 +2739,7 @@ async function scanLibrary() {
   setStatus(`${allSongs.length} canciones`)
   analyzeAudio(files)
   tagLibrary()
+  prepareWelcome()
 }
 
 function refreshLibraryViews() {

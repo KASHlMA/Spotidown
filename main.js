@@ -262,7 +262,6 @@ ipcMain.handle('dj-say-now', async (e, text, id) => {
     return { error: err.message, partial: !!err.partial }
   }
 })
-ipcMain.handle('dj-cached', (_, text) => gemini.cached(text))
 ipcMain.handle('dj-think', wrap((system, prompt, schema) => gemini.think(system, prompt, schema)))
 
 ipcMain.on('open-external', (_, url) => {
