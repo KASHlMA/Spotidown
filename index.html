@@ -196,6 +196,24 @@
         </div>
       </div>
 
+      <div id="rp-dj" class="rp-body dj-body" hidden>
+        <div class="dj-hero">
+          <div class="dj-orb" id="dj-orb"><span>DJ</span></div>
+          <div class="dj-vibe" id="dj-vibe">Tu diyéi personal</div>
+          <div class="dj-actions">
+            <button class="btn-pri" id="dj-start">Iniciar DJ</button>
+            <button class="btn-sec" id="dj-switch" hidden>Cambiar vibra</button>
+          </div>
+        </div>
+        <ul class="dj-log" id="dj-log"></ul>
+        <form class="dj-ask" id="dj-ask">
+          <input id="dj-input" type="text" placeholder="Pídele algo al DJ…" spellcheck="false" autocomplete="off"/>
+          <button type="submit" title="Enviar">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M2.01 21 23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+          </button>
+        </form>
+      </div>
+
       <div id="rp-queue" class="rp-body" hidden>
         <h3 class="q-section">Sonando ahora</h3>
         <ul id="queue-now" class="mini-list"></ul>
@@ -245,6 +263,7 @@
     </div>
 
     <div class="bar-right">
+      <button id="btn-dj" class="bar-btn bar-dj" title="DJ">DJ</button>
       <button id="btn-np" class="bar-btn" title="Vista Reproduciendo">
         <svg viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd" width="18" height="18"><path d="M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5zm2 0v14h8V5H5zm10 0v14h4V5h-4z"/></svg>
       </button>
@@ -266,7 +285,8 @@
 
   <div class="modal-back" id="settings" hidden>
     <div class="modal">
-      <h2>Géneros y radio</h2>
+      <h2>Ajustes</h2>
+      <h3 class="modal-h3">Géneros y radio (Last.fm)</h3>
       <p>Para saber el género y el mood de cada canción, y para armar radios con canciones parecidas, se usa <b>Last.fm</b>. Sólo necesitas una API key gratuita:</p>
       <ol>
         <li>Crea una cuenta en Last.fm (o inicia sesión).</li>
@@ -276,6 +296,11 @@
       <button class="modal-link" id="lfm-create">Abrir last.fm/api/account/create ↗</button>
       <input id="lfm-key" class="modal-input" type="text" placeholder="API key (32 caracteres)" spellcheck="false"/>
       <p class="modal-msg" id="lfm-msg"></p>
+      <h3 class="modal-h3">DJ con IA (Gemini)</h3>
+      <p>Con una key gratis de Google AI Studio el DJ entiende lo que le escribes y habla con voz natural. Sin ella funciona con frases armadas.</p>
+      <button class="modal-link" id="gem-create">Abrir aistudio.google.com ↗</button>
+      <input id="gem-key" class="modal-input" type="text" placeholder="API key de Gemini" spellcheck="false"/>
+      <p class="modal-msg" id="gem-msg"></p>
       <div class="modal-actions">
         <button class="btn-sec" id="lfm-cancel">Cancelar</button>
         <button class="btn-pri" id="lfm-save">Guardar</button>
@@ -284,6 +309,7 @@
   </div>
 
   <audio id="audio"></audio>
+  <audio id="dj-voice"></audio>
   <script src="renderer.js"></script>
 </body>
 </html>

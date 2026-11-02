@@ -61,6 +61,8 @@ let selectedIdx = -1
 let libFilter   = load('libFilter', 'all')
 let rightMode   = load('rightMode', 'np')   // 'np' | 'queue' | null
 let recentPaths = load('recents', [])
+let plays       = load('plays', {})     // path → { n: veces escuchada, last: timestamp }
+let playLog     = load('playLog', [])   // [[path, timestamp]] de las últimas escuchas
 let likedPaths  = new Set(load('liked', []))
 let volume      = load('volume', 0.66)
 let muted       = false
@@ -713,6 +715,26 @@ function cosine(a, b) {
 async function startRadio(seed, { quiet = false } = {}) {
   if (!seed) return
   setBg('radio', 'Armando radio…')
+  const list = await similarSongs(seed)
+  setBg('radio', '')
+  const ctx = { key: 'radio:' + seed.path, title: `Radio de ${seed.title}` }
+  if (seed === currentSong) {
+    // Sigue sonando la misma canción; sólo cambia lo que viene después
+    playContext = ctx
+    filtered = [seed, ...list]
+    currentIdx = 0
+    if (shuffle) buildShuffleQueue()
+    markSidebar()
+    renderRight()
+    updatePlayButtons()
+  } else {
+    playList([seed, ...list], 0, ctx)
+  }
+  if (!quiet && rightMode !== 'queue') setRight('queue')
+}
+
+// Hasta 50 canciones parecidas a `seed`, en orden barajado ponderado (radio y DJ)
+async function similarSongs(seed) {
   const q = lookupOf(seed)
   let sim = null
   if (lfm.ready && q) {
@@ -779,24 +801,8 @@ async function startRadio(seed, { quiet = false } = {}) {
     picks = [...score].sort((a, b) => b[1] - a[1]).slice(0, 80)
   }
   // Barajado ponderado: lo más parecido tiende a salir antes, pero cada radio es distinta
-  const list = picks.map(([s, v]) => [s, Math.pow(Math.random(), 1 / v)])
+  return picks.map(([s, v]) => [s, Math.pow(Math.random(), 1 / v)])
     .sort((a, b) => b[1] - a[1]).slice(0, 50).map(([s]) => s)
-
-  setBg('radio', '')
-  const ctx = { key: 'radio:' + seed.path, title: `Radio de ${seed.title}` }
-  if (seed === currentSong) {
-    // Sigue sonando la misma canción; sólo cambia lo que viene después
-    playContext = ctx
-    filtered = [seed, ...list]
-    currentIdx = 0
-    if (shuffle) buildShuffleQueue()
-    markSidebar()
-    renderRight()
-    updatePlayButtons()
-  } else {
-    playList([seed, ...list], 0, ctx)
-  }
-  if (!quiet && rightMode !== 'queue') setRight('queue')
 }
 
 // ── Navegación ────────────────────────────────────────────────────────────────
@@ -971,11 +977,13 @@ function buildHome() {
 
   const recents = recentPaths.map(p => songByPath.get(p)).filter(Boolean)
   const tiles = [
+    { title: 'DJ', cls: 'tile-dj', html: '<span>DJ</span>',
+      open: () => { if (rightMode !== 'dj') setRight('dj') }, play: () => djStart() },
     { title: 'Tus me gusta', cls: 'tile-liked', icon: I.heartFill,
       open: () => navigate({ name: 'liked' }), play: () => playList(likedSongs(), null, LIKED_CTX) },
     { title: 'Todas las canciones', cls: 'tile-songs', icon: I.note,
       open: () => navigate({ name: 'songs' }), play: () => playList(allSongs, null, SONGS_CTX) },
-    ...(recents.length ? recents : allSongs).slice(0, 6).map(s => ({
+    ...(recents.length ? recents : allSongs).slice(0, 5).map(s => ({
       title: s.title, song: s,
       open: () => navigate({ name: 'album', key: albumKey(s) }),
       play: () => playList(allSongs, allSongs.indexOf(s), SONGS_CTX),
@@ -990,7 +998,7 @@ function buildHome() {
     const img = document.createElement('div')
     img.className = 'tile-img'
     if (t.song) fillCover(img, [t.song], I.note)
-    else { img.classList.add(t.cls); img.innerHTML = svg(t.icon) }
+    else { img.classList.add(t.cls); img.innerHTML = t.html || svg(t.icon) }
     const name = document.createElement('span')
     name.className = 'tile-name'
     name.textContent = t.title
@@ -1494,13 +1502,16 @@ function renderRight() {
   $('right-panel').hidden = !rightMode
   $('btn-np').classList.toggle('active', rightMode === 'np')
   $('btn-queue').classList.toggle('active', rightMode === 'queue')
+  $('btn-dj').classList.toggle('active', rightMode === 'dj')
   $('rp-np').hidden    = rightMode !== 'np'
   $('rp-queue').hidden = rightMode !== 'queue'
-  $('rp-title').textContent = rightMode === 'queue'
-    ? 'Cola'
+  $('rp-dj').hidden    = rightMode !== 'dj'
+  $('rp-title').textContent = rightMode === 'queue' ? 'Cola'
+    : rightMode === 'dj' ? 'DJ'
     : (playContext?.title || currentSong?.album || 'Reproduciendo')
   if (rightMode === 'queue') renderQueue()
   if (rightMode === 'np') renderNpNext()
+  if (rightMode === 'dj') renderDjPanel()
   // el panel cambia el ancho de la lista central
   scheduleRender()
 }
@@ -1539,6 +1550,7 @@ function updateLikeButtons() {
 // ── Reproducción ──────────────────────────────────────────────────────────────
 function playList(songs, idx, ctx) {
   if (!songs.length) return
+  if (dj.on && ctx !== DJ_CTX) djStop()   // elegiste otra cosa: el DJ se retira
   playContext = ctx
   filtered = [...songs]
   if (idx == null || idx < 0) idx = shuffle ? Math.floor(Math.random() * filtered.length) : 0
@@ -1601,8 +1613,10 @@ function loadAndPlay(idx) {
   if (view.name === 'search') markSearchRows()
   markSidebar()
   renderRight()
-  // Última canción de la lista: se piden ya las similares para que el "siguiente" sea inmediato
-  if (!upcoming(1).length && repeatMode !== 1) prefetchRadio(song)
+  countedSong = null
+  // Última canción de la lista: se prepara lo que sigue para que el cambio sea inmediato
+  if (dj.on && playContext === DJ_CTX) { if (!upcoming(1).length) djPrepare() }
+  else if (!upcoming(1).length && repeatMode !== 1) prefetchRadio(song)
 
   if (audioCtx.state === 'suspended') audioCtx.resume()
   audio.src = toFileUrl(song.path)
@@ -1707,6 +1721,7 @@ function prefetchRadio(song) {
 // sigue con canciones parecidas a la última, como la reproducción automática de Spotify
 let autoplaying = false
 async function autoplay() {
+  if (dj.on) { djNextBlock(); return }
   if (autoplaying || !currentSong) return
   autoplaying = true
   try {
@@ -1765,6 +1780,423 @@ function toggleRepeat() {
   b.classList.toggle('one', repeatMode === 2)
   b.title = ['Activar repetición', 'Repetir una canción', 'Desactivar repetición'][repeatMode]
 }
+
+// ── Historial de escucha ──────────────────────────────────────────────────────
+// Una canción cuenta como escuchada a los 30 s (o a la mitad si es más corta)
+let countedSong = null
+
+function countPlay(song) {
+  const p = plays[song.path] || (plays[song.path] = { n: 0, last: 0 })
+  p.n++
+  p.last = Date.now()
+  playLog.push([song.path, p.last])
+  if (playLog.length > 600) playLog = playLog.slice(-600)
+  save('plays', plays)
+  save('playLog', playLog)
+}
+
+// Qué tanto la escuchas últimamente (las escuchas viejas pesan menos)
+function affinity(s) {
+  const p = plays[s.path]
+  return p ? p.n * Math.exp(-(Date.now() - p.last) / (21 * 864e5)) : 0
+}
+
+function weightedPick(items, weight) {
+  const ws = items.map(weight)
+  let r = Math.random() * ws.reduce((a, b) => a + b, 0)
+  for (let i = 0; i < items.length; i++) { r -= ws[i]; if (r <= 0) return items[i] }
+  return items[items.length - 1]
+}
+
+// ── DJ ────────────────────────────────────────────────────────────────────────
+// Arma bloques de canciones según tus gustos, la hora y el día, y entre bloques
+// habla. Con Gemini escribe lo que dice y entiende peticiones; sin Gemini usa
+// frases armadas y palabras clave. La voz es Gemini (Laomedeia) o la de Windows.
+const DJ_CTX = { key: 'dj:', title: 'DJ' }
+const dj = {
+  on: false, ai: false, vibe: null, recent: [], next: null, preparing: false,
+  ttsOffUntil: 0, log: [], thinking: false, speaking: false,
+}
+const DAYS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado']
+
+function timeBoost(id) {
+  const d = new Date(), h = d.getHours(), wd = d.getDay()
+  const night   = h >= 21 || h < 4
+  const party   = (wd === 5 || wd === 6) && (h >= 19 || h < 4)
+  const morning = h >= 6 && h < 12
+  let b = 1
+  if (night && ['m-triste', 'm-romance', 'm-chill'].includes(id)) b *= 1.6
+  if (party && ['m-bailar', 'm-peda', 'reggaeton', 'cumbia'].includes(id)) b *= 1.8
+  if (morning && ['m-feliz', 'm-energia', 'm-chill'].includes(id)) b *= 1.5
+  return b
+}
+
+// Una vibra es un género, a veces combinado con un mood ("Corridos · Triste / Despecho").
+// Los moods solos mezclan estilos que no pegan entre sí, por eso siempre van con un género.
+function pickVibe(exclude = []) {
+  const gg = getGenreGroups()
+  const score = songs => { let a = 0; for (const s of songs) a += affinity(s); return 1 + a }
+  const genres = gg.genres.filter(g => g.songs.length >= 8 && !exclude.includes(g.key))
+  if (!genres.length) return null
+  const genre = weightedPick(genres, g => score(g.songs) * timeBoost(g.key) * (dj.recent.includes(g.key) ? 0.15 : 1))
+  const inGenre = new Set(genre.songs)
+  const combos = gg.moods.map(m => ({ m, songs: m.songs.filter(s => inGenre.has(s)) })).filter(c => c.songs.length >= 6)
+  // Con mood la mitad de las veces, o casi siempre si la hora pide uno (noche → triste…)
+  if (combos.length && Math.random() < 0.5 + 0.2 * Math.max(...combos.map(c => timeBoost(c.m.key) - 1))) {
+    const c = weightedPick(combos, c => score(c.songs) * timeBoost(c.m.key))
+    const key = `${genre.key}+${c.m.key}`
+    if (!exclude.includes(key)) return { key, name: `${genre.name} · ${c.m.name}`, songs: c.songs, color: genre.color }
+  }
+  return genre
+}
+
+const forgotten = s => (likedPaths.has(s.path) || plays[s.path]?.n >= 3) && Date.now() - (plays[s.path]?.last || 0) > 30 * 864e5
+
+// 5–6 canciones: lo que más te late de ese pool, alguna olvidada, máximo 2 por artista
+function buildBlock(pool, n = 5) {
+  const t = Date.now() - 3 * 36e5
+  const recent = new Set(playLog.filter(([, ts]) => ts > t).map(([p]) => p))
+  let cands = pool.filter(s => s !== currentSong && !recent.has(s.path))
+  if (cands.length < n) cands = pool.filter(s => s !== currentSong)
+  const out = [], perArtist = new Map()
+  while (out.length < n && cands.length) {
+    const s = weightedPick(cands, x => 1 + 2 * Math.log1p(affinity(x)) + (likedPaths.has(x.path) ? 1 : 0) + (forgotten(x) ? 2 : 0))
+    cands = cands.filter(x => x !== s)
+    const a = splitArtists(s.artist)[0] || ''
+    if ((perArtist.get(a) || 0) >= 2) continue
+    perArtist.set(a, (perArtist.get(a) || 0) + 1)
+    out.push(s)
+  }
+  // Arranca con una conocida
+  out.sort((a, b) => affinity(b) - affinity(a))
+  return out
+}
+
+function topArtistWeek() {
+  const t = Date.now() - 7 * 864e5, count = new Map()
+  for (const [p, ts] of playLog) {
+    if (ts < t) continue
+    const a = splitArtists(songByPath.get(p)?.artist)[0]
+    if (a) count.set(a, (count.get(a) || 0) + 1)
+  }
+  return [...count].sort((a, b) => b[1] - a[1])[0]?.[0] || null
+}
+
+function blockFacts(block) {
+  const d = new Date(), first = block.songs[0], p = plays[first.path]
+  const old = block.songs.find(forgotten)
+  return {
+    hora: d.toLocaleTimeString('es-MX', { hour: 'numeric', minute: '2-digit' }),
+    dia: DAYS[d.getDay()],
+    vibra: block.vibe.name.replace(' · ', ' con mood '),
+    primera_cancion: first.title, primer_artista: splitArtists(first.artist)[0] || '',
+    // Sólo si hay historial: sin él la IA cree que 0 = "nunca la has oído"
+    veces_que_la_has_escuchado: p?.n >= 2 ? p.n : undefined,
+    otros_artistas: [...new Set(block.songs.slice(1).map(s => splitArtists(s.artist)[0]).filter(Boolean))].slice(0, 3),
+    artista_que_mas_escuchas_esta_semana: topArtistWeek(),
+    cancion_que_no_escuchas_hace_mucho: old && old !== first ? `${old.title} de ${splitArtists(old.artist)[0]}` : null,
+  }
+}
+
+const DJ_SYSTEM =
+  'Eres la diyéi de Spotidown, el reproductor de música personal del usuario. Hablas como locutora de radio mexicana ' +
+  'joven: cálida, carismática y con jerga mexicana natural (la neta, qué onda, va, ¿a poco no?), sin exagerar. ' +
+  'Reglas: de 1 a 3 frases y máximo 40 palabras. Escribe "diyéi" en lugar de DJ. Escribe los números con letra. ' +
+  'Usa sólo los datos que te dan; no inventes canciones, artistas ni datos. Sin emojis, comillas, asteriscos ni ' +
+  'listas. Háblale de tú. Varía tus frases: no empieces siempre igual.'
+
+const DJ_TASK = {
+  intro:   'Saluda (es el inicio de la sesión) y presenta el primer bloque.',
+  next:    'Haz la transición: presenta el siguiente bloque como en la radio.',
+  switch:  'El usuario pidió cambiar de vibra. Confírmalo con buena onda y presenta el nuevo bloque.',
+}
+
+const DJ_TEMPLATES = {
+  intro: [
+    '¡Qué onda! Aquí tu diyéi. Vamos a arrancar con {vibra}, y para abrir, {artista}.',
+    '¡Hola, hola! Es {dia} y ya estoy lista. Te traigo {vibra}, empezando con {cancion} de {artista}.',
+  ],
+  next: [
+    'Va, cambiamos tantito el rollo: ahora {vibra}. Arrancamos con {artista}.',
+    'Seguimos. Lo que sigue es {vibra}, y abre {artista} con {cancion}.',
+    'Ahí te va un bloque de {vibra}. Empezamos con {artista}, ¿a poco no?',
+  ],
+  switch: [
+    '¡Sale! Otra vibra: {vibra}. Va {artista}.',
+    'Entendido, cambiamos. Ahora, {vibra}, con {cancion} de {artista}.',
+  ],
+}
+
+function templateLine(kind, f) {
+  const list = DJ_TEMPLATES[kind] || DJ_TEMPLATES.next
+  return list[Math.floor(Math.random() * list.length)]
+    .replace('{vibra}', f.vibra.toLowerCase()).replace('{artista}', f.primer_artista)
+    .replace('{cancion}', f.primera_cancion).replace('{dia}', f.dia)
+}
+
+async function djLine(kind, block) {
+  const f = blockFacts(block)
+  if (dj.ai) {
+    const r = await api.djThink(DJ_SYSTEM, `${DJ_TASK[kind] || DJ_TASK.next}\nDatos: ${JSON.stringify(f)}`)
+    if (r.ok) return r.ok.replace(/[*"“”]/g, '').trim()
+  }
+  return templateLine(kind, f)
+}
+
+// Texto → archivo de voz (Gemini). null si no hay o se acabó el límite: se usa la voz de Windows.
+async function djVoice(text) {
+  if (!dj.ai || Date.now() < dj.ttsOffUntil) return null
+  const r = await api.djSay(text)
+  if (r.ok) return r.ok
+  if (r.error === 'quota') dj.ttsOffUntil = Date.now() + 10 * 60 * 1000
+  return null
+}
+
+// Mientras el DJ habla, la música baja
+function duck(on) {
+  const v = (muted ? 0 : volume) * VOL_BOOST
+  gainNode.gain.setTargetAtTime(on ? v * 0.22 : v, audioCtx.currentTime, 0.25)
+}
+
+const djAudio = $('dj-voice')
+function speak(text, file) {
+  return new Promise(resolve => {
+    let done = false
+    const finish = () => {
+      if (done) return
+      done = true
+      clearTimeout(guard)
+      dj.speaking = false
+      duck(false)
+      renderDjPanel()
+      resolve()
+    }
+    const guard = setTimeout(finish, 45000)
+    dj.speaking = true
+    duck(true)
+    renderDjPanel()
+    if (file) {
+      djAudio.src = toFileUrl(file)
+      djAudio.onended = djAudio.onerror = finish
+      djAudio.play().catch(finish)
+    } else if ('speechSynthesis' in window) {
+      const u = new SpeechSynthesisUtterance(text)
+      u.lang = 'es-MX'
+      u.voice = speechSynthesis.getVoices().find(v => v.lang === 'es-MX') || null
+      u.rate = 1.05
+      u.onend = u.onerror = finish
+      speechSynthesis.speak(u)
+    } else {
+      finish()
+    }
+  })
+}
+
+function djSay(text) { dj.log.push({ who: 'dj', text }); dj.log = dj.log.slice(-30); renderDjPanel() }
+
+// Pone un bloque: la música arranca ya (bajita) mientras se prepara lo que dirá el DJ
+async function djPlay(block, prepared) {
+  dj.on = true
+  dj.vibe = block.vibe
+  dj.recent = [block.vibe.key, ...dj.recent.filter(k => k !== block.vibe.key)].slice(0, 3)
+  dj.next = null
+  playList(block.songs, 0, DJ_CTX)
+  duck(true)
+  dj.thinking = !prepared
+  renderDjPanel()
+  const line = prepared?.line ?? await djLine(block.kind, block)
+  const file = prepared && 'file' in prepared ? prepared.file : await djVoice(line)
+  dj.thinking = false
+  if (!dj.on) { duck(false); return }
+  djSay(line)
+  await speak(line, file)
+}
+
+function newBlock(kind, exclude = []) {
+  const vibe = pickVibe(exclude)
+  return vibe && { kind, vibe, songs: buildBlock(vibe.songs) }
+}
+
+async function djStart() {
+  if (!allSongs.length) return
+  dj.recent = []
+  const block = newBlock('intro')
+  if (!block) { djSay('Todavía estoy conociendo tu música. Dame un ratito a que termine de clasificarla.'); return }
+  if (rightMode !== 'dj') setRight('dj')
+  await djPlay(block)
+}
+
+function djStop() {
+  dj.on = false
+  dj.next = null
+  dj.vibe = null
+  djAudio.pause()
+  if ('speechSynthesis' in window) speechSynthesis.cancel()
+  duck(false)
+  renderDjPanel()
+}
+
+// Mientras suena la última canción del bloque se prepara el siguiente (frase + voz)
+async function djPrepare() {
+  if (dj.preparing || dj.next) return
+  dj.preparing = true
+  try {
+    const block = newBlock('next', dj.vibe ? [dj.vibe.key] : [])
+    if (!block) return
+    const line = await djLine('next', block)
+    const file = await djVoice(line)
+    if (dj.on) dj.next = { block, line, file }
+  } finally {
+    dj.preparing = false
+  }
+}
+
+async function djNextBlock() {
+  if (dj.next) { const { block, line, file } = dj.next; await djPlay(block, { line, file }); return }
+  const block = newBlock('next', dj.vibe ? [dj.vibe.key] : [])
+  if (block) await djPlay(block)
+}
+
+async function djSwitch() {
+  const block = newBlock('switch', dj.vibe ? [dj.vibe.key] : [])
+  if (block) await djPlay(block)
+}
+
+// ── Peticiones al DJ ("ponme algo pa la peda pero sin reggaetón") ─────────────
+const REQ_SCHEMA = {
+  type: 'object',
+  properties: {
+    reply:      { type: 'string', description: 'Lo que la diyéi le contesta al usuario en voz alta (1-2 frases)' },
+    title:      { type: 'string', description: 'Nombre corto de la vibra que vas a poner' },
+    genres:     { type: 'array', items: { type: 'string' }, description: 'ids de géneros a incluir' },
+    moods:      { type: 'array', items: { type: 'string' }, description: 'ids de moods a incluir' },
+    exclude:    { type: 'array', items: { type: 'string' }, description: 'ids de géneros o moods a evitar' },
+    artists:    { type: 'array', items: { type: 'string' }, description: 'artistas a incluir, escritos igual que en la lista' },
+    similar_to: { type: 'string', description: 'artista o canción a la que se debe parecer, o vacío' },
+  },
+  required: ['reply', 'title'],
+}
+
+function catalogText() {
+  const gg = getGenreGroups()
+  const groups = [...gg.genres, ...gg.moods].map(g => `${g.key} (${g.name}, ${g.songs.length})`).join('; ')
+  const artists = getGroups().artistList.filter(a => a.name !== 'Artista desconocido')
+    .sort((a, b) => b.songs.length - a.songs.length).slice(0, 150).map(a => a.name).join(', ')
+  return `Géneros y moods disponibles (id, nombre, canciones): ${groups}\nArtistas del usuario: ${artists}`
+}
+
+// Sin IA: busca géneros, moods y artistas mencionados; "sin X" excluye y "como X" busca parecidas
+function keywordPlan(text) {
+  const f = fold(text)
+  const [main, ...rest] = f.split(/\b(?:sin|nada de|menos|no quiero)\b/)
+  const gg = getGenreGroups()
+  const groups = [...gg.genres, ...gg.moods]
+  const mentions = seg => groups.filter(g => [g.name, ...(g.alias || []), ...g.tags].some(t => {
+    const ft = fold(t)
+    return ft.length >= 4 && new RegExp(`\\b${ft.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(seg)
+  }))
+  const like = /\bcomo\s+(.+)$/.exec(main)
+  const head = like ? main.slice(0, like.index) : main
+  const inc = mentions(head)
+  const artists = getGroups().artistList.filter(a => a.name.length >= 4 && fold(head).includes(fold(a.name))).map(a => a.name)
+  const title = [...inc.map(g => g.name), ...artists].join(' + ') || (like ? `Parecido a ${like[1]}` : text)
+  return {
+    title,
+    reply: `¡Va! Te pongo ${title.toLowerCase()}.`,
+    genres: inc.filter(g => !g.mood).map(g => g.key),
+    moods: inc.filter(g => g.mood).map(g => g.key),
+    exclude: rest.flatMap(seg => mentions(seg).map(g => g.key)),
+    artists,
+    similar_to: like ? like[1].trim() : '',
+  }
+}
+
+async function poolFromPlan(plan) {
+  const gg = getGenreGroups()
+  const songsOf = ids => new Set((ids || []).flatMap(id => gg.map.get(id)?.songs || []))
+  const known = id => gg.map.has(id)
+  let pool = null
+  const g = songsOf((plan.genres || []).filter(known)), m = songsOf((plan.moods || []).filter(known))
+  if (g.size) pool = g
+  if (m.size) {
+    const both = pool ? new Set([...pool].filter(s => m.has(s))) : m
+    pool = both.size >= 5 ? both : (pool ? new Set([...pool, ...m]) : m)
+  }
+  const wanted = new Set((plan.artists || []).map(fold))
+  if (wanted.size) {
+    const bySinger = allSongs.filter(s => splitArtists(s.artist).some(a => wanted.has(fold(a))))
+    pool = pool ? new Set([...pool, ...bySinger]) : new Set(bySinger)
+  }
+  if (plan.similar_to) {
+    const m2 = searchMatches(plan.similar_to)
+    const b = bestMatch(plan.similar_to, m2)
+    const seed = b?.kind === 'song' ? b.song : b?.songs ? [...b.songs].sort((x, y) => affinity(y) - affinity(x))[0] : null
+    if (seed) {
+      const sim = await similarSongs(seed)
+      const keep = pool ? sim.filter(s => pool.has(s)) : []
+      pool = new Set(keep.length >= 5 ? keep : sim)
+    }
+  }
+  if (!pool) return []
+  const ex = new Set((plan.exclude || []).filter(known))
+  return [...pool].filter(s => !(s.genres || []).some(id => ex.has(id)))
+}
+
+async function djAsk(text) {
+  text = text.trim()
+  if (!text) return
+  dj.log.push({ who: 'yo', text })
+  dj.thinking = true
+  renderDjPanel()
+  let plan = null
+  if (dj.ai) {
+    const r = await api.djThink(
+      DJ_SYSTEM + ' Ahora el usuario te pide algo: elige qué poner usando SÓLO los ids y artistas de la lista y contéstale.',
+      `${catalogText()}\n\nPetición del usuario: ${text}`, REQ_SCHEMA)
+    if (r.ok) plan = r.ok
+  }
+  if (!plan) plan = keywordPlan(text)
+  const pool = await poolFromPlan(plan)
+  dj.thinking = false
+  if (pool.length < 3) {
+    const line = 'Uy, no encontré nada así en tu música. ¿Me lo pides de otra forma?'
+    djSay(line)
+    await speak(line, await djVoice(line))
+    return
+  }
+  const block = { kind: 'request', vibe: { key: 'req:' + fold(plan.title || text), name: plan.title || text }, songs: buildBlock(pool, 6) }
+  const line = (plan.reply || `¡Va! Te pongo ${block.vibe.name}.`).replace(/[*"“”]/g, '').trim()
+  if (rightMode !== 'dj') setRight('dj')
+  await djPlay(block, { line })
+}
+
+// ── Panel del DJ ──────────────────────────────────────────────────────────────
+function renderDjPanel() {
+  if (rightMode !== 'dj') return
+  $('dj-orb').classList.toggle('speaking', dj.speaking)
+  $('dj-orb').classList.toggle('thinking', dj.thinking)
+  $('dj-vibe').textContent = dj.thinking ? 'El diyéi está pensando…'
+    : dj.on && dj.vibe ? `Sonando: ${dj.vibe.name}` : 'Tu diyéi personal'
+  $('dj-start').textContent = dj.on ? 'Detener DJ' : 'Iniciar DJ'
+  $('dj-switch').hidden = !dj.on
+  const ul = $('dj-log')
+  ul.innerHTML = dj.log.map(m => `<li class="dj-msg ${m.who}">${esc(m.text)}</li>`).join('') ||
+    `<li class="dj-empty">${dj.ai
+      ? 'Dale a Iniciar DJ, o escríbele lo que se te antoje: "corridos tristes", "algo pa la peda sin reggaetón", "algo como Kevin Kaarl"…'
+      : 'Dale a Iniciar DJ. Si conectas Gemini en ajustes, además entiende lo que le escribas y habla con voz natural.'}</li>`
+  ul.scrollTop = ul.scrollHeight
+}
+
+$('dj-start').addEventListener('click', () => dj.on ? djStop() : djStart())
+$('dj-switch').addEventListener('click', djSwitch)
+$('btn-dj').addEventListener('click', () => setRight('dj'))
+$('dj-ask').addEventListener('submit', e => {
+  e.preventDefault()
+  const t = $('dj-input').value
+  $('dj-input').value = ''
+  djAsk(t)
+})
+api.geminiStatus().then(s => { dj.ai = s.hasKey; renderDjPanel() })
 
 // ── Lyrics ────────────────────────────────────────────────────────────────────
 const LRC_RE  = /\[(\d{1,2}):(\d{2})[.:](\d{2,3})\](.*)/
@@ -1990,6 +2422,10 @@ function rafLoop() {
   if (!seeking && !audio.paused && !audio.ended) {
     const dur = getDur()
     if (dur > 0) {
+      if (currentSong && countedSong !== currentSong && audio.currentTime >= Math.min(30, dur / 2)) {
+        countedSong = currentSong
+        countPlay(currentSong)
+      }
       seekSlider.set(audio.currentTime / dur)
       $('t-cur').textContent = fmtTime(audio.currentTime)
       syncLyrics(audio.currentTime)
@@ -2240,35 +2676,47 @@ window.addEventListener('blur', closeMenu)
 // ── Ajustes: API key de Last.fm ───────────────────────────────────────────────
 function openSettings() {
   $('settings').hidden = false
-  $('lfm-msg').textContent = lfm.ready ? 'Last.fm ya está conectado. Puedes cambiar la key o borrarla para desconectar.' : ''
-  $('lfm-msg').className = 'modal-msg'
-  $('lfm-key').value = ''
+  $('lfm-msg').textContent = lfm.ready ? 'Last.fm ya está conectado. Pega otra key sólo si quieres cambiarla.' : ''
+  $('gem-msg').textContent = dj.ai ? 'Gemini ya está conectado. Pega otra key sólo si quieres cambiarla.' : ''
+  $('lfm-msg').className = $('gem-msg').className = 'modal-msg'
+  $('lfm-key').value = $('gem-key').value = ''
   $('lfm-key').focus()
 }
 function closeSettings() { $('settings').hidden = true }
 
-async function saveLastfmKey() {
-  const key = $('lfm-key').value.trim()
-  const msg = $('lfm-msg')
-  if (!key && !lfm.ready) { msg.textContent = 'Pega tu API key primero.'; msg.className = 'modal-msg err'; return }
-  msg.textContent = key ? 'Comprobando…' : 'Desconectando…'
-  msg.className = 'modal-msg'
+// Guarda sólo las keys que se escribieron; cada una se comprueba antes de aceptarla
+async function saveSettings() {
+  const lk = $('lfm-key').value.trim(), gk = $('gem-key').value.trim()
+  if (!lk && !gk) { closeSettings(); return }
   $('lfm-save').disabled = true
-  const r = await api.lastfmSetKey(key)
+  let ok = true
+  for (const [key, msgId, set, after] of [
+    [lk, 'lfm-msg', api.lastfmSetKey, () => tagLibrary()],
+    [gk, 'gem-msg', api.geminiSetKey, () => { dj.ai = true; renderDjPanel() }],
+  ]) {
+    if (!key) continue
+    const msg = $(msgId)
+    msg.textContent = 'Comprobando…'
+    msg.className = 'modal-msg'
+    const r = await set(key)
+    if (r.ok) { msg.textContent = '¡Conectado!'; after() }
+    else { ok = false; msg.textContent = r.error; msg.className = 'modal-msg err' }
+  }
   $('lfm-save').disabled = false
-  if (!r.ok) { msg.textContent = r.error; msg.className = 'modal-msg err'; return }
-  closeSettings()
-  tagLibrary()
+  if (ok) closeSettings()
 }
 
 $('btn-settings').addEventListener('click', openSettings)
 $('lfm-cancel').addEventListener('click', closeSettings)
-$('lfm-save').addEventListener('click', saveLastfmKey)
+$('lfm-save').addEventListener('click', saveSettings)
 $('lfm-create').addEventListener('click', () => api.openExternal('https://www.last.fm/api/account/create'))
-$('lfm-key').addEventListener('keydown', e => {
-  if (e.key === 'Enter') saveLastfmKey()
-  if (e.key === 'Escape') closeSettings()
-})
+$('gem-create').addEventListener('click', () => api.openExternal('https://aistudio.google.com/apikey'))
+for (const id of ['lfm-key', 'gem-key']) {
+  $(id).addEventListener('keydown', e => {
+    if (e.key === 'Enter') saveSettings()
+    if (e.key === 'Escape') closeSettings()
+  })
+}
 $('settings').addEventListener('mousedown', e => { if (e.target === $('settings')) closeSettings() })
 
 // Los botones no se quedan con el foco: así la barra espaciadora no los "pulsa"

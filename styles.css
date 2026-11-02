@@ -228,6 +228,50 @@ img { display: block; }
 .srow .srow-like { visibility: hidden; }
 .srow:hover .srow-like, .srow .srow-like.on { visibility: visible; }
 
+/* ── DJ ── */
+.tile-dj { background: radial-gradient(circle at 30% 30%, #ff7ad9, #7b2ff7 55%, #1b1464) !important; color: #fff !important; }
+.tile-dj span { font-weight: 900; font-size: 20px; letter-spacing: -.5px; }
+.bar-dj { width: auto; padding: 0 6px; font-size: 12px; font-weight: 900; letter-spacing: .5px; }
+
+.dj-body { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 12px; }
+.dj-hero { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 8px 0 16px; flex-shrink: 0; }
+.dj-orb {
+  width: 120px; height: 120px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  background: radial-gradient(circle at 30% 30%, #ff7ad9, #7b2ff7 55%, #1b1464);
+  box-shadow: 0 0 0 0 rgba(180, 90, 255, .6); transition: transform .3s;
+}
+.dj-orb span { font-size: 34px; font-weight: 900; letter-spacing: -1px; }
+.dj-orb.speaking { animation: dj-pulse 1.1s ease-in-out infinite; }
+.dj-orb.thinking { animation: dj-think 1.6s linear infinite; }
+@keyframes dj-pulse {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(180, 90, 255, .55); }
+  50% { transform: scale(1.06); box-shadow: 0 0 0 18px rgba(180, 90, 255, 0); }
+}
+@keyframes dj-think { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+.dj-vibe { font-size: 15px; font-weight: 700; text-align: center; color: var(--white); }
+.dj-actions { display: flex; gap: 8px; }
+.dj-actions .btn-pri, .dj-actions .btn-sec { height: 36px; padding: 0 18px; }
+.dj-actions .btn-sec { background: rgba(255,255,255,.1); color: var(--white); }
+
+.dj-log { list-style: none; flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 4px 2px 12px; }
+.dj-msg {
+  max-width: 88%; padding: 10px 12px; border-radius: 14px; font-size: 14px; line-height: 1.4;
+  user-select: text; white-space: pre-wrap;
+}
+.dj-msg.dj { align-self: flex-start; background: #2a1f3d; border-bottom-left-radius: 4px; }
+.dj-msg.yo { align-self: flex-end; background: var(--green); color: #000; border-bottom-right-radius: 4px; }
+.dj-empty { color: var(--t2); font-size: 13px; line-height: 1.5; text-align: center; padding: 8px; }
+.dj-ask {
+  display: flex; align-items: center; gap: 6px; flex-shrink: 0; background: var(--elev);
+  border-radius: 24px; padding: 4px 4px 4px 14px; border: 1px solid transparent;
+}
+.dj-ask:focus-within { border-color: #535353; }
+.dj-ask input { flex: 1; min-width: 0; background: none; border: none; outline: none; color: var(--white); font: inherit; font-size: 14px; height: 36px; }
+.dj-ask button { width: 36px; height: 36px; border-radius: 50%; background: var(--green); color: #000; display: flex; align-items: center; justify-content: center; }
+.modal-h3 { font-size: 15px; font-weight: 700; margin: 18px 0 6px; color: var(--white); }
+.modal-h3:first-of-type { margin-top: 0; }
+.modal { max-height: calc(100vh - 32px); overflow-y: auto; }
+
 /* Géneros de la canción actual */
 .np-genres { display: flex; flex-wrap: wrap; gap: 6px; margin: -4px 0 14px; }
 .np-genres:empty { display: none; }

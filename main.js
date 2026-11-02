@@ -2,10 +2,12 @@ const { app, BrowserWindow, ipcMain, shell, nativeImage, utilityProcess } = requ
 const path = require('path')
 const fs   = require('fs')
 const createLastfm = require('./lastfm')
+const createGemini = require('./gemini')
 
 const MUSIC_DIR = app.getPath('music')
 const CACHE_PATH = path.join(app.getPath('userData'), 'music-cache.json')
 const lastfm = createLastfm(app.getPath('userData'))
+const gemini = createGemini(app.getPath('userData'))
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -243,6 +245,14 @@ ipcMain.handle('audio-analyze', (_, files) => {
   if (todo.length || lyrics.length) startAudioWorker().postMessage({ type: 'analyze', items: todo, lyrics })
   return todo.length + lyrics.length
 })
+
+// ── IPC: Gemini (cerebro y voz del DJ) ───────────────────────────────────────
+// Los errores viajan como { error } para que el renderer decida el respaldo
+const wrap = fn => (_, ...a) => fn(...a).then(v => ({ ok: v }), e => ({ error: e.message }))
+ipcMain.handle('gemini-status',  () => ({ hasKey: gemini.hasKey() }))
+ipcMain.handle('gemini-set-key', (_, key) => gemini.setKey(key))
+ipcMain.handle('dj-say',   wrap(text => gemini.say(text)))
+ipcMain.handle('dj-think', wrap((system, prompt, schema) => gemini.think(system, prompt, schema)))
 
 ipcMain.on('open-external', (_, url) => {
   if (/^https:\/\//.test(url)) shell.openExternal(url)
