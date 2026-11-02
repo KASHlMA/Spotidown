@@ -1815,6 +1815,7 @@ function weightedPick(items, weight) {
 const DJ_CTX = { key: 'dj:', title: 'DJ Nat' }
 const dj = {
   on: false, ai: false, vibe: null, recent: [], next: null, prep: null, alt: null, altPrep: null, sinceHello: 0,
+  sameVibe: 0, used: new Set(),   // bloques seguidos en la misma vibra / canciones ya puestas en la sesión
   log: [], thinking: false, speaking: false,
 }
 const DAYS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado']
@@ -1833,15 +1834,18 @@ function timeBoost(id) {
 
 // Una vibra es un género, a veces combinado con un mood ("Corridos · Triste / Despecho").
 // Los moods solos mezclan estilos que no pegan entre sí, por eso siempre van con un género.
-function pickVibe(exclude = []) {
+// avoid: vibras que no se excluyen pero pesan mucho menos (p. ej. con la que arrancó la vez pasada)
+function pickVibe(exclude = [], avoid = []) {
   const gg = getGenreGroups()
-  const score = songs => { let a = 0; for (const s of songs) a += affinity(s); return 1 + a }
+  // Logaritmo: si no, un género con muchas canciones escuchadas (cumbia) ganaba casi siempre
+  const score = songs => { let a = 0; for (const s of songs) a += affinity(s); return 1 + Math.log1p(a) }
   // Se excluye por género: "merengue+m-bailar" también excluye "merengue" (si no, "cambiar
   // de vibra" podía pasar de merengue a merengue)
   const excludeGenres = exclude.map(k => k.split('+')[0])
   const genres = gg.genres.filter(g => g.songs.length >= 8 && !excludeGenres.includes(g.key))
   if (!genres.length) return null
-  const genre = weightedPick(genres, g => score(g.songs) * timeBoost(g.key) * (dj.recent.includes(g.key) ? 0.15 : 1))
+  const genre = weightedPick(genres, g => score(g.songs) * timeBoost(g.key) *
+    (dj.recent.includes(g.key) ? 0.15 : 1) * (avoid.includes(g.key) ? 0.2 : 1))
   const inGenre = new Set(genre.songs)
   const combos = gg.moods.map(m => ({ m, songs: m.songs.filter(s => inGenre.has(s)) })).filter(c => c.songs.length >= 6)
   // Con mood la mitad de las veces, o casi siempre si la hora pide uno (noche → triste…)
@@ -1878,14 +1882,38 @@ function buildBlock(pool, n = 5) {
   return out
 }
 
-function topArtistWeek() {
-  const t = Date.now() - 7 * 864e5, count = new Map()
+// Vibra para arrancar: lo que estabas escuchando antes ("seguimos con tu mood de hace rato")
+// la mayoría de las veces; si no, una al azar, evitando la misma con la que arrancó la vez pasada
+function startVibe() {
+  const lastStart = load('djLastStart', null)
+  const last = currentSong || songByPath.get(recentPaths[0])
+  const gg = getGenreGroups()
+  const g = last?.genres?.map(id => gg.map.get(id)).find(x => x && !x.mood && x.songs.length >= 8)
+  if (g && g.key !== lastStart && Math.random() < 0.7) return { ...g, fromRecent: true }
+  return pickVibe([], lastStart ? [lastStart] : [])
+}
+
+// Lo más escuchado de la semana, para que Nat lo comente de vez en cuando
+function weekStats() {
+  const t = Date.now() - 7 * 864e5, byArtist = new Map(), bySong = new Map()
   for (const [p, ts] of playLog) {
     if (ts < t) continue
-    const a = splitArtists(songByPath.get(p)?.artist)[0]
-    if (a) count.set(a, (count.get(a) || 0) + 1)
+    const s = songByPath.get(p)
+    if (!s) continue
+    const a = splitArtists(s.artist)[0]
+    if (a) byArtist.set(a, (byArtist.get(a) || 0) + 1)
+    bySong.set(s, (bySong.get(s) || 0) + 1)
   }
-  return [...count].sort((a, b) => b[1] - a[1])[0]?.[0] || null
+  const top = m => [...m].sort((x, y) => y[1] - x[1])[0]
+  return { artist: top(byArtist), song: top(bySong) }
+}
+
+function personalFact() {
+  const { artist, song } = weekStats()
+  const facts = []
+  if (artist?.[1] >= 3) facts.push(`esta semana escuchó ${artist[1]} veces a ${artist[0]}`)
+  if (song?.[1] >= 3) facts.push(`la rola que más escuchó esta semana es ${cleanTitle(song[0].title)} de ${splitArtists(song[0].artist)[0]} (${song[1]} veces)`)
+  return facts.length ? facts[Math.floor(Math.random() * facts.length)] : null
 }
 
 function blockFacts(block) {
@@ -1897,7 +1925,7 @@ function blockFacts(block) {
     // Sólo si hay historial: sin él la IA cree que 0 = "nunca la has oído"
     veces_que_la_has_escuchado: p?.n >= 2 ? p.n : undefined,
     otros_artistas: [...new Set(block.songs.slice(1).map(s => splitArtists(s.artist)[0]).filter(Boolean))].slice(0, 3),
-    artista_que_mas_escuchas_esta_semana: topArtistWeek(),
+    continua_lo_que_escuchaba: block.vibe.fromRecent || undefined,
     cancion_que_no_escuchas_hace_mucho: old && old !== first ? `${cleanTitle(old.title)} de ${splitArtists(old.artist)[0]}` : null,
   }
 }
@@ -1916,6 +1944,9 @@ const DJ_TASK = {
            'primera rola. Máximo 30 palabras.',
   intro:   'Es la primera canción de la sesión: un saludo muy corto (dos o tres palabras) y presenta el bloque.',
   next:    'Haz la transición al siguiente bloque como en la radio, sin saludar.',
+  continue: 'Siguen con la misma vibra de antes: haz la transición diciendo que continúan con ese mood o estilo ' +
+            '(ej. "seguimos con tu mood tristón de hace rato"), sin saludar.',
+  drift:   'Siguen con rolas parecidas a lo que venía sonando: haz la transición conectando con el estilo anterior, sin saludar.',
   switch:  'El usuario pidió cambiar de vibra. Confírmalo con buena onda y presenta el nuevo bloque, sin saludar.',
 }
 
@@ -1965,11 +1996,22 @@ async function djLine(kind, block) {
   }
   // Cada 3 bloques (contando desde el saludo) dice tu nombre y la hora, como en la radio
   let task = DJ_TASK[kind] || DJ_TASK.next
-  if ((kind === 'next' || kind === 'switch') && dj.sinceHello >= 2) {
+  const transition = ['next', 'switch', 'continue', 'drift'].includes(kind)
+  if (transition && dj.sinceHello >= 2) {
     f.nombre = userName || undefined
     f.hora = new Date().toLocaleTimeString('es-MX', { hour: 'numeric', minute: '2-digit', hour12: true })
     task += ' Esta vez, de forma natural, dile su nombre (si lo hay) y la hora en palabras.'
     block.timed = Date.now()
+  } else if (transition) {
+    // De vez en cuando, algo personal o el día, para que no suene siempre igual
+    const roll = Math.random(), fact = roll < 0.3 && personalFact()
+    if (fact) {
+      f.dato_personal = fact
+      task += ' Menciona de forma natural el dato personal (ej. "esta semana no has soltado a…").'
+    } else if (roll >= 0.3 && roll < 0.5) {
+      f.dia = DAYS[new Date().getDay()]
+      task += ' Menciona el día de forma natural (ej. "pa ambientar este lunes").'
+    }
   }
   if (dj.ai) {
     const r = await api.djThink(DJ_SYSTEM, `${task}\nDatos: ${JSON.stringify(f)}`)
@@ -2128,6 +2170,8 @@ function djSay(text) { dj.log.push({ who: 'dj', text }); dj.log = dj.log.slice(-
 // prepara qué decir) y cuando está por terminar entra la primera canción desde abajo.
 async function djPlay(block, prepared) {
   dj.on = true
+  dj.sameVibe = dj.vibe?.key === block.vibe.key ? dj.sameVibe + 1 : 0
+  for (const s of block.songs) dj.used.add(s.path)
   dj.vibe = block.vibe
   dj.recent = [block.vibe.key, ...dj.recent.filter(k => k !== block.vibe.key)].slice(0, 3)
   dj.sinceHello = block.timed ? 0 : dj.sinceHello + 1
@@ -2150,6 +2194,32 @@ async function djPlay(block, prepared) {
   prepareAlt()
 }
 
+function startBlock(kind) {
+  const vibe = startVibe()
+  return vibe && { kind, vibe, songs: buildBlock(vibe.songs) }
+}
+
+// Siguiente bloque: sigue con la misma vibra (hasta 3 bloques o hasta que se acaben sus
+// canciones) y luego pasa a rolas que suenan parecido a la última. Cambiar de género es
+// cosa de "Cambiar vibra".
+async function continueBlock() {
+  const v = dj.vibe
+  if (v?.songs && dj.sameVibe < 2) {
+    const pool = v.songs.filter(s => !dj.used.has(s.path))
+    if (pool.length >= 5) return { kind: 'continue', vibe: v, songs: buildBlock(pool) }
+  }
+  const seed = currentSong
+  if (seed) {
+    const sim = (await similarSongs(seed)).filter(s => !dj.used.has(s.path))
+    if (sim.length >= 5) {
+      const g = (seed.genres || []).map(id => GENRE_BY_ID.get(id)).find(x => x && !x.mood)
+      const vibe = { key: 'sim:' + seed.path, name: g ? `${g.name} y parecidas` : 'Rolas parecidas', songs: sim }
+      return { kind: 'drift', vibe, songs: buildBlock(sim) }
+    }
+  }
+  return newBlock('next', v ? [v.key] : [])
+}
+
 function newBlock(kind, exclude = []) {
   const vibe = pickVibe(exclude)
   return vibe && { kind, vibe, songs: buildBlock(vibe.songs) }
@@ -2162,12 +2232,14 @@ let welcomed = false
 async function djStart() {
   if (!allSongs.length) return
   dj.recent = []
+  dj.used = new Set()
   const kind = welcomed ? 'intro' : 'welcome'
   welcomed = true
   const ready = kind === 'welcome' && welcomeReady && Date.now() - welcomeReady.at < 10 * 60 * 1000 ? welcomeReady : null
   welcomeReady = null
-  const block = ready?.block || newBlock(kind)
+  const block = ready?.block || startBlock(kind)
   if (!block) { djSay('Todavía estoy conociendo tu música. Dame un ratito a que termine de clasificarla.'); return }
+  save('djLastStart', block.vibe.key.split('+')[0])
   if (rightMode !== 'dj') setRight('dj')
   await djPlay(block, ready && { line: ready.line, file: ready.file })
 }
@@ -2181,7 +2253,7 @@ function prepareWelcome() {
     for (let i = 0; i < 50 && !getGenreGroups().genres.length; i++) await new Promise(r => setTimeout(r, 300))
     if (!(await api.geminiStatus()).hasKey || welcomed) return
     dj.ai = true
-    const block = newBlock('welcome')
+    const block = startBlock('welcome')
     if (!block) return
     const line = await djLine('welcome', block)
     const r = await api.djSay(line, 'gemini')
@@ -2222,9 +2294,9 @@ function djStop() {
 function djPrepare() {
   if (dj.next || dj.prep) return dj.prep
   dj.prep = (async () => {
-    const block = newBlock('next', dj.vibe ? [dj.vibe.key] : [])
+    const block = await continueBlock()
     if (!block) return
-    const line = await djLine('next', block)
+    const line = await djLine(block.kind, block)
     const file = await djVoice(line)
     if (dj.on) dj.next = { block, line, file }
   })().finally(() => { dj.prep = null })
@@ -2248,7 +2320,7 @@ function djNextBlock() {
       await dj.prep
     }
     if (dj.next) { const { block, line, file } = dj.next; await djPlay(block, { line, file }); return }
-    const block = newBlock('next', dj.vibe ? [dj.vibe.key] : [])
+    const block = await continueBlock()
     if (block) await djPlay(block)
   })
 }
@@ -2371,7 +2443,7 @@ async function djAsk(text) {
     await speakLive(line)
     return
   }
-  const block = { kind: 'request', vibe: { key: 'req:' + fold(plan.title || text), name: plan.title || text }, songs: buildBlock(pool, 6) }
+  const block = { kind: 'request', vibe: { key: 'req:' + fold(plan.title || text), name: plan.title || text, songs: pool }, songs: buildBlock(pool, 6) }
   // La respuesta se escribió antes de elegir canciones: se le agrega la que de verdad
   // abre, para que la voz no tenga hueco que rellenar inventando un artista
   const first = block.songs[0], artist = splitArtists(first.artist)[0] || ''
