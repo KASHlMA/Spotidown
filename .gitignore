@@ -4,5 +4,5 @@ dist/
 # API key personal de Last.fm
 lastfm-key.txt
 
-# Celular: www/ se arma con mobile/build.mjs
-mobile/www/
+# App de Android: tiene su propio repo (KASHlMA/Spotidown-movil)
+mobile/
