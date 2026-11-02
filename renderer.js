@@ -1967,7 +1967,7 @@ function blockFacts(block) {
 
 const DJ_SYSTEM =
   'Eres la voz que presenta la música en el reproductor personal del usuario, como una locutora de radio mexicana ' +
-  'joven: cálida, carismática y con jerga mexicana natural (la neta, va, ¿a poco no?), sin exagerar. ' +
+  'joven: cálida, carismática y con jerga mexicana natural, sin exagerar. ' +
   'Te llamas DJ Nat. Reglas: de 1 a 2 frases y máximo 25 palabras. Se escribe "rola" (con una sola ele). ' +
   'NO te presentes ni digas tu nombre (nada de "soy DJ Nat", "aquí tu…") salvo que la tarea lo pida. NO saludes ni digas la hora o el día, salvo que la tarea lo pida. Ve directo a la música. ' +
   'Usa sólo los datos que te dan; no inventes canciones, artistas ni datos. Sin emojis, comillas, asteriscos, ' +
@@ -1988,6 +1988,43 @@ const DJ_TASK = {
             '(ej. "seguimos con tu mood tristón de hace rato"), sin saludar.',
   drift:   'Siguen con rolas parecidas a lo que venía sonando: haz la transición conectando con el estilo anterior, sin saludar.',
   switch:  'El usuario pidió cambiar de vibra. Confírmalo con buena onda y presenta el nuevo bloque, sin saludar.',
+}
+
+// Para que no diga siempre lo mismo: cada frase lleva un estilo distinto, un par de
+// expresiones sugeridas al azar y las últimas frases que dijo (para no repetirlas)
+const DJ_ANGLES = [
+  'Échale porras al artista de la primera rola, como fan.',
+  'Hazle una pregunta juguetona al usuario sobre la rola o su mood.',
+  'Dilo con mucha energía, como si fuera el mejor momento de la noche en la radio.',
+  'Dilo tranqui y cercana, como si platicaran en confianza.',
+  'Haz una comparación chistosa o una exageración ligera sobre la vibra.',
+  'Invítalo a hacer algo con la rola: cantarla, bailarla, subirle, cerrar los ojos…',
+  'Conecta la vibra con un momento cotidiano (la chamba, el tráfico, la desvelada, la fiesta, el desamor).',
+  'Haz un mini comentario de complicidad, como si ya conocieras sus gustos.',
+  'Empieza directo con el nombre de la rola o del artista y luego un comentario.',
+  'Usa un tono de locutora que anuncia algo especial: "atención", "ojo", "aguas"…',
+  'Hazlo cortito y con punch: una sola frase.',
+  'Ponle un toque de humor con un dicho o refrán mexicano.',
+]
+const DJ_SLANG = ['qué chido', 'está cañón', 'aguas', 'sale y vale', 'no manches', 'qué rico', 'está perrón',
+  'neta', 'a darle', 'ándale', 'pura vida', 'bien bonito', 'de lujo', 'que no pare', 'súbele', 'qué tal eh',
+  'a lo que vinimos', 'ni modo', 'chulada', 'qué belleza', 'ahí te va', 'pa que te acuerdes', 'agárrate',
+  'esto pega', 'bien sabrosón', 'para el alma', 'sin miedo', 'arre', 'échale', 'pura calidad']
+const DJ_BANNED = '¿a poco no se antoja?, ¿a poco no?, se antoja, bien a gusto, la neta se va a poner buena, va que va'
+let djLines = load('djLines', [])
+let djAngleLog = []
+function djVariety() {
+  const free = DJ_ANGLES.filter(a => !djAngleLog.includes(a))
+  const angle = free[Math.floor(Math.random() * free.length)]
+  djAngleLog = [angle, ...djAngleLog].slice(0, 5)
+  const slang = [...DJ_SLANG].sort(() => Math.random() - 0.5).slice(0, 2)
+  return `\nEstilo de esta vez: ${angle} Si te late, usa alguna de estas expresiones: ${slang.join(', ')}. ` +
+    `Prohibido usar: ${DJ_BANNED}.` +
+    (djLines.length ? `\nFrases que ya dijiste (NO repitas sus inicios, cierres ni muletillas; que suene distinta): ${djLines.slice(0, 8).join(' | ')}` : '')
+}
+function rememberLine(line) {
+  djLines = [line, ...djLines].slice(0, 12)
+  save('djLines', djLines)
 }
 
 const DJ_TEMPLATES = {
@@ -2021,7 +2058,9 @@ function templateLine(kind, f) {
 // Lo que escribe la IA antes de pasarlo a voz: sin acotaciones entre paréntesis (la voz las
 // leería), comillas ni asteriscos, "rola" bien escrito
 function cleanLine(t) {
-  return String(t).replace(/\s*[([][^)\]]*[)\]]\s*/g, ' ').replace(/\s{2,}/g, ' ').replace(/[*"“”]/g, '').replace(/\brollas?\b/gi, m => m.replace(/ll/i, 'l')).trim()
+  return String(t).replace(/\s*[([][^)\]]*[)\]]\s*/g, ' ')
+    // La muletilla que ya cansaba, por si se le escapa
+    .replace(/\s*¿?\s*a poco no se (te )?antoja\s*\??/gi, '').replace(/\s{2,}/g, ' ').replace(/[*"“”]/g, '').replace(/\brollas?\b/gi, m => m.replace(/ll/i, 'l')).trim()
 }
 
 async function djLine(kind, block) {
@@ -2064,8 +2103,8 @@ async function djLine(kind, block) {
     }
   }
   if (dj.ai) {
-    const r = await api.djThink(DJ_SYSTEM, `${task}\nDatos: ${JSON.stringify(f)}`)
-    if (r.ok) return cleanLine(r.ok)
+    const r = await api.djThink(DJ_SYSTEM, `${task}\nDatos: ${JSON.stringify(f)}${djVariety()}`)
+    if (r.ok) { const line = cleanLine(r.ok); rememberLine(line); return line }
   }
   return templateLine(kind, f)
 }
