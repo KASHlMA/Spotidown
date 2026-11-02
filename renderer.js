@@ -1876,24 +1876,34 @@ const mainGenre = s => (s.genres || []).find(id => !GENRE_BY_ID.get(id)?.mood)
 // 5–6 canciones: lo que más te late de ese pool, alguna olvidada, máximo 2 por artista.
 // genre: si la vibra es un género, las que son de otro género principal pesan poco, máximo
 // 1 por bloque y nunca abren (si no, la cumbia que más escuchas abría casi cualquier vibra)
-// Lo que el DJ ya puso y cuándo (path → fecha): lo de los últimos días casi no se repite
+const keyPart = t => fold(t).replace(/[^a-z0-9ñ]/g, '')
+const songKey = s => s._key || (s._key = keyPart(cleanTitle(s.title)) + '|' + keyPart(splitArtists(s.artist)[0] || ''))
+
+// Lo que el DJ ya puso y cuándo (canción → fecha): lo de los últimos días casi no se repite
 let djSeen = load('djSeen', {})
 function markDjSeen(songs) {
   const now = Date.now(), limit = now - 14 * 864e5
-  for (const s of songs) djSeen[s.path] = now
+  for (const s of songs) djSeen[songKey(s)] = now
   for (const p in djSeen) if (djSeen[p] < limit) delete djSeen[p]
   save('djSeen', djSeen)
 }
 function seenFactor(s) {
-  const age = Date.now() - (djSeen[s.path] || 0)
+  const age = Date.now() - (djSeen[songKey(s)] || 0)
   return age < 3 * 864e5 ? 0.06 : age < 7 * 864e5 ? 0.35 : 1
 }
 
 function buildBlock(pool, n = 5, genre = null) {
   const t = Date.now() - 3 * 36e5
-  const recent = new Set(playLog.filter(([, ts]) => ts > t).map(([p]) => p))
-  let cands = pool.filter(s => s !== currentSong && !recent.has(s.path))
-  if (cands.length < n) cands = pool.filter(s => s !== currentSong)
+  const keyOf = p => { const x = songByPath.get(p); return x ? songKey(x) : p }
+  const recent = new Set(playLog.filter(([, ts]) => ts > t).map(([p]) => keyOf(p)))
+  const now = currentSong && songKey(currentSong)
+  // Una sola copia de cada canción (la que más escuchas)
+  const byKey = new Map()
+  for (const x of pool) { const k = songKey(x), o = byKey.get(k); if (!o || affinity(x) > affinity(o)) byKey.set(k, x) }
+  const uniq = [...byKey.values()]
+  let cands = uniq.filter(x => songKey(x) !== now && !recent.has(songKey(x)))
+  if (cands.length < n) cands = uniq.filter(x => songKey(x) !== now)
+  const heard = new Set(Object.keys(plays).map(keyOf))
   const pure = s => !genre || mainGenre(s) === genre
   const enoughPure = cands.filter(pure).length >= n
   let mixed = 0
@@ -1902,7 +1912,7 @@ function buildBlock(pool, n = 5, genre = null) {
   const artists = new Set(cands.map(s => splitArtists(s.artist)[0] || ''))
   const cap = Math.max(2, Math.ceil(n / artists.size))
   // 1–2 por bloque que nunca has escuchado (o casi), para descubrir lo que tienes guardado
-  const fresh = cands.filter(x => !plays[x.path] && pure(x) && seenFactor(x) === 1)
+  const fresh = cands.filter(x => !heard.has(songKey(x)) && pure(x) && seenFactor(x) === 1)
   let wantFresh = Math.min(fresh.length, n >= 5 ? 2 : 1)
   while (out.length < n && cands.length) {
     const pickFresh = wantFresh > 0
@@ -2343,7 +2353,7 @@ function djSay(text) { dj.log.push({ who: 'dj', text }); dj.log = dj.log.slice(-
 async function djPlay(block, prepared, after) {
   dj.on = true
   dj.sameVibe = dj.vibe?.key === block.vibe.key ? dj.sameVibe + 1 : 0
-  for (const s of block.songs) dj.used.add(s.path)
+  for (const s of block.songs) dj.used.add(songKey(s))
   markDjSeen(block.songs)
   dj.vibe = block.vibe
   dj.recent = [block.vibe.key, ...dj.recent.filter(k => k !== block.vibe.key)].slice(0, 3)
@@ -2384,12 +2394,12 @@ function startBlock(kind) {
 async function continueBlock() {
   const v = dj.vibe
   if (v?.songs && dj.sameVibe < 2) {
-    const pool = v.songs.filter(s => !dj.used.has(s.path))
+    const pool = v.songs.filter(s => !dj.used.has(songKey(s)))
     if (pool.length >= 5) return { kind: 'continue', vibe: v, songs: buildBlock(pool, 5, v.key.split('+')[0]) }
   }
   const seed = currentSong
   if (seed) {
-    const sim = (await similarSongs(seed)).filter(s => !dj.used.has(s.path))
+    const sim = (await similarSongs(seed)).filter(s => !dj.used.has(songKey(s)))
     if (sim.length >= 5) {
       const g = (seed.genres || []).map(id => GENRE_BY_ID.get(id)).find(x => x && !x.mood)
       const vibe = { key: 'sim:' + seed.path, name: g ? `${g.name} y parecidas` : 'Rolas parecidas', songs: sim }
@@ -2964,11 +2974,11 @@ async function djAsk(text) {
   }
   // "tipo Cachirula o Emi Blue": abre una rola de cada uno (de las que más escuchas) y luego parecidas
   for (const ref of [plan.similar_to || []].flat().filter(Boolean).slice(0, 2)) {
-    const own = pool.filter(s => !wanted.includes(s) && splitArtists(s.artist).some(a => fold(a) === fold(ref)))
+    const own = pool.filter(s => !wanted.some(w => songKey(w) === songKey(s)) && splitArtists(s.artist).some(a => fold(a) === fold(ref)))
     const pick = own.sort((x, y) => affinity(y) - affinity(x))[Math.floor(Math.random() * Math.min(2, own.length))]
     if (pick) wanted.push(pick)
   }
-  const rest = pool.filter(s => !wanted.includes(s))
+  const rest = pool.filter(s => !wanted.some(w => songKey(w) === songKey(s)))
   const songs = [...wanted, ...buildBlock(rest, Math.max(3, 6 - wanted.length))]
   const block = { kind: 'request', vibe: { key: 'req:' + fold(plan.title || text), name: plan.title || text, songs: rest }, songs }
   // La respuesta se escribió antes de elegir canciones: se le agrega la que de verdad
