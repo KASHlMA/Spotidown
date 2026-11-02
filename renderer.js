@@ -1967,7 +1967,15 @@ async function djLine(kind, block) {
 
 // Texto → archivo de voz. Laomedeia (Gemini), generada completa y verificada antes de
 // sonar; si no sale bien, Dalia (Edge, sin límite). Sin internet, la voz de Windows.
-async function djVoice(text) {
+// fast: alguien está esperando. Las dos voces se generan a la vez: si la de Nat sale bien
+// antes de 10 s se usa; si no, Dalia ya está lista y no hay que esperar otra vez.
+async function djVoice(text, fast = false) {
+  if (dj.ai && fast) {
+    const dalia = api.djSay(text, 'dalia')
+    const r = await Promise.race([api.djSay(text, 'gemini', true), new Promise(res => setTimeout(() => res({}), 10000))])
+    if (r.ok) return r.ok
+    return (await dalia).ok || null
+  }
   if (dj.ai) {
     const r = await api.djSay(text, 'gemini')
     if (r.ok) return r.ok
@@ -2070,7 +2078,7 @@ async function djPlay(block, prepared, ack) {
   dj.thinking = !ready
   renderDjPanel()
   const line = prepared?.line ?? await djLine(block.kind, block)
-  const file = ready ? prepared.file : await djVoice(line)
+  const file = ready ? prepared.file : await djVoice(line, true)
   if (ack) await ack
   dj.thinking = false
   if (!dj.on) { renderDjPanel(); return }
@@ -2262,7 +2270,7 @@ async function djAsk(text) {
   dj.thinking = false
   if (pool.length < 3) {
     const line = 'Uy, no encontré nada así en tu música. ¿Me lo pides de otra forma?'
-    const file = await djVoice(line)
+    const file = await djVoice(line, true)
     await ack
     await speak(line, file)
     return

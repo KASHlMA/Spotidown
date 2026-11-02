@@ -171,8 +171,11 @@ module.exports = function createGemini(dir) {
   // - cortó el final: se genera sólo lo que faltó y se pega
   // - salió distinta (improvisó, se brincó algo, dijo acotaciones): se genera otra vez
   // Hasta 3 intentos; si ninguno sale bien, lanza error y el renderer usa Dalia.
-  async function liveSay(text) {
-    for (let attempt = 1; attempt <= 3; attempt++) {
+  // fast: alguien está esperando (petición, inicio, cambio de vibra): un solo intento y sin
+  // completar finales cortados; si no sale bien, el renderer usa Dalia de inmediato
+  async function liveSay(text, fast = false) {
+    const attempts = fast ? 1 : 3
+    for (let attempt = 1; attempt <= attempts; attempt++) {
       let session = null
       try {
         session = await openLiveRetry(text)
@@ -181,7 +184,7 @@ module.exports = function createGemini(dir) {
         await sleep(1200)   // la transcripción llega un poco después que el audio
         let said = session.said()
         session.close()
-        const tail = missingTail(text, said)
+        const tail = fast ? null : missingTail(text, said)
         if (tail) {
           log('completando', `faltó: ${tail}`, text)
           const s2 = await openLiveRetry(tail)
@@ -205,17 +208,17 @@ module.exports = function createGemini(dir) {
         session?.close()
       }
       // Reintentos pegados también salían sin audio (Google satura y sólo transcribe): espera
-      if (attempt < 3) await sleep(attempt * 4000)
+      if (attempt < attempts) await sleep(attempt * 4000)
     }
     throw new Error('unfaithful')
   }
 
   // Frase → archivo de audio verificado. Se guarda en caché: lo que ya se dijo una vez no
   // gasta otra vez (los "¡Va!" y "¡Sale!" de respuesta rápida salen de aquí al instante).
-  async function say(text) {
+  async function say(text, fast = false) {
     const file = path.join(VOICE_DIR, crypto.createHash('sha1').update(VOICE + VOICE_VERSION + text).digest('hex') + '.wav')
     if (fs.existsSync(file)) return file
-    const wav = await liveSay(text)
+    const wav = await liveSay(text, fast)
     fs.mkdirSync(VOICE_DIR, { recursive: true })
     fs.writeFileSync(file, wav)
     return file

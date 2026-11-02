@@ -253,7 +253,7 @@ const wrap = fn => (_, ...a) => fn(...a).then(v => ({ ok: v }), e => ({ error: e
 ipcMain.handle('gemini-status',  () => ({ hasKey: gemini.hasKey() }))
 ipcMain.handle('gemini-set-key', (_, key) => gemini.setKey(key))
 // engine: 'gemini' (Laomedeia, verificada antes de entregarla) o 'dalia' (Edge, sin límite)
-ipcMain.handle('dj-say', wrap((text, engine) => engine === 'gemini' ? gemini.say(text) : voice.say(text)))
+ipcMain.handle('dj-say', wrap((text, engine, fast) => engine === 'gemini' ? gemini.say(text, fast) : voice.say(text)))
 ipcMain.handle('dj-cached', (_, text) => gemini.cached(text))
 ipcMain.handle('dj-think', wrap((system, prompt, schema) => gemini.think(system, prompt, schema)))
 
