@@ -15,7 +15,8 @@ const LIVE_MODEL = 'gemini-2.5-flash-native-audio-latest'
 const VOICE      = 'Laomedeia'
 const LIVE_SYSTEM = 'Eres DJ Nat, una locutora de radio mexicana joven, muy expresiva, cálida, juguetona y carismática. ' +
   'Cuando te mandan un texto, lo dices EN VOZ ALTA palabra por palabra, actuándolo de verdad: con muchas emociones, ' +
-  'sonrisas en la voz, cambios de ritmo, energía de radio y acento mexicano. No agregues ni cambies nada, no comentes: sólo actúalo.'
+  'sonrisas en la voz, cambios de ritmo, energía de radio y acento mexicano. Di EXACTAMENTE ese texto: no agregues, ' +
+  'quites ni cambies palabras, no comentes, y NUNCA menciones canciones, artistas ni datos que no estén en el texto.'
 const TTS_GAP_MS = 21000   // el nivel gratis de voz permite ~3 frases por minuto
 // A la voz actuada sólo se le manda el texto: cualquier instrucción de estilo la acababa
 // leyendo en voz alta a veces. La emoción sale del propio texto (¡…!, ¿a poco no?, la neta…).
@@ -33,6 +34,8 @@ module.exports = function createGemini(dir) {
   const SETTINGS_PATH = path.join(dir, 'gemini.json')
   const VOICE_DIR     = path.join(dir, 'dj-voice')
   const settings = readJson(SETTINGS_PATH, {})
+  // Audios de un solo uso (frases en las que la voz improvisó) de sesiones anteriores
+  try { for (const f of fs.readdirSync(VOICE_DIR)) if (f.startsWith('tmp-')) fs.rmSync(path.join(VOICE_DIR, f), { force: true }) } catch {}
   let ttsChain = Promise.resolve()
   const lastCall  = {}   // modelo → último uso (para respetar ~3 por minuto)
   const exhausted = {}   // modelo → día (hora del Pacífico) en que se acabó su cuota
@@ -66,17 +69,22 @@ module.exports = function createGemini(dir) {
 
   // Voz por la API en vivo: se abre una sesión, se manda el texto y se junta el audio que
   // regresa. onChunk recibe cada pedazo (PCM 16 bits, 24 kHz) en cuanto llega.
+  // Se resuelve con { wav, said } — said es la transcripción de lo que dijo de verdad
   function liveSpeak(text, onChunk) {
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(`${LIVE_URL}?key=${encodeURIComponent(settings.key)}`)
       const pcm = []
+      let said = ''
       // partial: ya se mandó audio a reproducir, así que no se puede cambiar a otra voz
       const fail = err => { clearTimeout(timer); try { ws.terminate() } catch {} reject(Object.assign(new Error(err), { partial: pcm.length > 0 })) }
       const timer = setTimeout(() => fail('network'), 60000)
       ws.on('open', () => ws.send(JSON.stringify({ setup: {
         model: 'models/' + LIVE_MODEL,
-        generationConfig: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICE } } } },
+        // Temperatura baja: que actúe el texto, no que improvise
+        generationConfig: { temperature: 0.3, responseModalities: ['AUDIO'],
+                            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICE } } } },
         systemInstruction: { parts: [{ text: LIVE_SYSTEM }] },
+        outputAudioTranscription: {},
       } })))
       ws.on('message', raw => {
         let m
@@ -91,10 +99,11 @@ module.exports = function createGemini(dir) {
           pcm.push(buf)
           onChunk?.(buf)
         }
+        if (m.serverContent?.outputTranscription?.text) said += m.serverContent.outputTranscription.text
         if (m.serverContent?.turnComplete) {
           clearTimeout(timer)
           ws.close()
-          pcm.length ? resolve(pcmToWav(Buffer.concat(pcm), 24000)) : reject(new Error('network'))
+          pcm.length ? resolve({ wav: pcmToWav(Buffer.concat(pcm), 24000), said }) : reject(new Error('network'))
         }
       })
       ws.on('close', code => { if (code === 1008 || code === 1011) fail(code === 1008 ? 'invalid-key' : 'quota') })
@@ -121,16 +130,33 @@ module.exports = function createGemini(dir) {
   // Frase → archivo de audio. Se guarda en caché: lo que ya se dijo una vez no gasta otra vez.
   // Primero la voz nativa en vivo (sin límite; si hay onChunk se va reproduciendo mientras
   // llega). Si falla antes de mandar audio, la voz actuada (10 al día por modelo).
+  // Lo que dijo vs. lo que debía decir: la voz nativa a veces improvisa (se inventó a
+  // Juan Gabriel). Cuenta las palabras dichas que no estaban en el texto.
+  function faithful(text, said) {
+    if (!said.trim()) return true   // sin transcripción no se puede juzgar
+    const norm = s => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9ñ\s]/g, ' ').split(/\s+/).filter(Boolean)
+    const want = new Set(norm(text)), got = norm(said)
+    const extra = got.filter(w => !want.has(w)).length
+    return extra <= Math.max(2, got.length * 0.2)
+  }
+
   async function say(text, onChunk) {
     const file = path.join(VOICE_DIR, crypto.createHash('sha1').update(VOICE + VOICE_VERSION + text).digest('hex') + '.wav')
     if (fs.existsSync(file)) return file
-    try {
-      const wav = await liveSpeak(text, onChunk)
-      fs.mkdirSync(VOICE_DIR, { recursive: true })
-      fs.writeFileSync(file, wav)
-      return file
-    } catch (e) {
-      if (e.partial || e.message === 'invalid-key') throw e
+    // En streaming ya sonó, así que no se puede repetir; sin streaming (frases preparadas)
+    // se intenta otra vez si improvisó
+    for (let attempt = 0; attempt < (onChunk ? 1 : 2); attempt++) {
+      try {
+        const { wav, said } = await liveSpeak(text, onChunk)
+        const tmp = path.join(VOICE_DIR, `tmp-${process.pid}-${Date.now()}.wav`)
+        fs.mkdirSync(VOICE_DIR, { recursive: true })
+        if (faithful(text, said)) { fs.writeFileSync(file, wav); return file }
+        console.warn('DJ improvisó:', JSON.stringify(text), '→', JSON.stringify(said))
+        if (onChunk) { fs.writeFileSync(tmp, wav); return tmp }   // se reproduce pero no se guarda en caché
+      } catch (e) {
+        if (e.partial || e.message === 'invalid-key') throw e
+        break
+      }
     }
     return ttsFallback(text, file)
   }

@@ -2006,7 +2006,7 @@ function speak(text, file, onNearEnd) {
     const guard = setTimeout(finish, 45000)
     dj.speaking = true
     duck(true)
-    renderDjPanel()
+    djSay(text)   // el texto aparece cuando empieza a hablar, no antes
     if (file) {
       djAudio.src = toFileUrl(file)
       djAudio.onended = djAudio.onerror = finish
@@ -2080,7 +2080,7 @@ async function speakLive(text, onNearEnd) {
   let near = false
   const nearEnd = () => { if (!near) { near = true; onNearEnd?.() } }
   const player = streamVoice(id, {
-    onFirst: () => { dj.thinking = false; dj.speaking = true; duck(true); renderDjPanel() },
+    onFirst: () => { dj.thinking = false; dj.speaking = true; duck(true); djSay(text) },
     onNearEnd: nearEnd,
   })
   activeStream = player
@@ -2117,7 +2117,6 @@ async function djPlay(block, prepared) {
   renderDjPanel()
   const line = prepared?.line ?? await djLine(block.kind, block)
   if (!dj.on) { dj.thinking = false; renderDjPanel(); return }
-  djSay(line)
   let started = false
   const startMusic = () => {
     if (started || !dj.on) return
@@ -2176,16 +2175,33 @@ function djPrepare() {
   return dj.prep
 }
 
-async function djNextBlock() {
-  if (!dj.next && dj.prep) await dj.prep   // si aún se está preparando, se espera en lugar de empezar otro
-  if (dj.next) { const { block, line, file } = dj.next; await djPlay(block, { line, file }); return }
-  const block = newBlock('next', dj.vibe ? [dj.vibe.key] : [])
-  if (block) await djPlay(block)
+// Un solo cambio de bloque a la vez: si adelantas canciones o le das "siguiente" varias
+// veces mientras Nat prepara el siguiente bloque, no se piden bloques de más
+let djChanging = false
+async function djChange(fn) {
+  if (djChanging) return
+  djChanging = true
+  try { await fn() } finally { djChanging = false }
 }
 
-async function djSwitch() {
-  const block = newBlock('switch', dj.vibe ? [dj.vibe.key] : [])
-  if (block) await djPlay(block)
+function djNextBlock() {
+  return djChange(async () => {
+    if (!dj.next && dj.prep) {
+      dj.thinking = true   // te avisa que está preparando lo que sigue
+      renderDjPanel()
+      await dj.prep
+    }
+    if (dj.next) { const { block, line, file } = dj.next; await djPlay(block, { line, file }); return }
+    const block = newBlock('next', dj.vibe ? [dj.vibe.key] : [])
+    if (block) await djPlay(block)
+  })
+}
+
+function djSwitch() {
+  return djChange(async () => {
+    const block = newBlock('switch', dj.vibe ? [dj.vibe.key] : [])
+    if (block) await djPlay(block)
+  })
 }
 
 // ── Peticiones al DJ ("ponme algo pa la peda pero sin reggaetón") ─────────────
@@ -2291,12 +2307,15 @@ async function djAsk(text) {
   dj.thinking = false
   if (pool.length < 3) {
     const line = 'Uy, no encontré nada así en tu música. ¿Me lo pides de otra forma?'
-    djSay(line)
     await speak(line, await djVoice(line))
     return
   }
   const block = { kind: 'request', vibe: { key: 'req:' + fold(plan.title || text), name: plan.title || text }, songs: buildBlock(pool, 6) }
-  const line = cleanLine(plan.reply || `¡Va! Te pongo ${block.vibe.name}.`)
+  // La respuesta se escribió antes de elegir canciones: se le agrega la que de verdad
+  // abre, para que la voz no tenga hueco que rellenar inventando un artista
+  const first = block.songs[0], artist = splitArtists(first.artist)[0] || ''
+  let line = cleanLine(plan.reply || `¡Va! Te pongo ${block.vibe.name}.`)
+  if (!fold(line).includes(fold(first.title))) line += ` Arrancamos con ${first.title}${artist ? ` de ${artist}` : ''}.`
   if (rightMode !== 'dj') setRight('dj')
   await djPlay(block, { line })
 }
