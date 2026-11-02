@@ -1984,8 +1984,8 @@ const DJ_TASK = {
             '(ej. "hoy ya repetiste 5 veces Gil"). Máximo 35 palabras.',
   intro:   'Es la primera canción de la sesión: un saludo muy corto (dos o tres palabras) y presenta el bloque.',
   next:    'Haz la transición al siguiente bloque como en la radio, sin saludar.',
-  continue: 'Siguen con la misma vibra de antes: haz la transición diciendo que continúan con ese mood o estilo ' +
-            '(ej. "seguimos con tu mood tristón de hace rato"), sin saludar.',
+  continue: 'Siguen con la misma vibra de antes: haz la transición dando a entender que continúan con ese mood o ' +
+            'estilo, con tus propias palabras, sin saludar.',
   drift:   'Siguen con rolas parecidas a lo que venía sonando: haz la transición conectando con el estilo anterior, sin saludar.',
   switch:  'El usuario pidió cambiar de vibra. Confírmalo con buena onda y presenta el nuevo bloque, sin saludar.',
 }
@@ -2005,12 +2005,36 @@ const DJ_ANGLES = [
   'Usa un tono de locutora que anuncia algo especial: "atención", "ojo", "aguas"…',
   'Hazlo cortito y con punch: una sola frase.',
   'Ponle un toque de humor con un dicho o refrán mexicano.',
+  'Cuéntalo como chisme: "te tengo una"…',
+  'Dilo como si la rola fuera un regalo que le tenías guardado.',
+  'Haz como que la rola te encanta a ti también y por qué.',
+  'Describe en pocas palabras cómo se siente la rola (el ritmo, la voz, la letra).',
+  'Dale un consejo cortito relacionado con el mood (pa la tusa, pa la fiesta, pa relajarse).',
+  'Hazlo con picardía y coqueteo ligero de locutora.',
+  'Dilo como si estuvieras en vivo con mucha gente escuchando.',
+  'Haz una predicción juguetona: "esta va a ser tu nueva favorita", "esta la vas a repetir"…',
+  'Haz que suene a complicidad de desvelo o de fiesta según la hora.',
+  'Menciona sólo al artista y deja que la rola hable, súper breve.',
+  'Haz un brindis por la vibra o por el usuario.',
+  'Dilo con dramatismo de telenovela, de forma chistosa.',
+  'Relaciónalo con un plan: la peda, el gym, limpiar el cuarto, manejar, estudiar.',
+  'Hazlo como reto: a ver si no la canta, a ver si aguanta sin bailar.',
 ]
+// Cómo empezar la frase (lo que más se repetía era el inicio)
+const DJ_OPENERS = ['con una exclamación', 'con una pregunta', 'con el nombre de la rola', 'con el nombre del artista',
+  'hablando de la vibra', 'con una expresión mexicana', 'con un comentario sobre el momento del día', 'con algo chistoso',
+  'con "oye"', 'con "atención"', 'con un "uff" o "uy"', 'directo con lo que sigue']
 const DJ_SLANG = ['qué chido', 'está cañón', 'aguas', 'sale y vale', 'no manches', 'qué rico', 'está perrón',
   'neta', 'a darle', 'ándale', 'pura vida', 'bien bonito', 'de lujo', 'que no pare', 'súbele', 'qué tal eh',
   'a lo que vinimos', 'ni modo', 'chulada', 'qué belleza', 'ahí te va', 'pa que te acuerdes', 'agárrate',
-  'esto pega', 'bien sabrosón', 'para el alma', 'sin miedo', 'arre', 'échale', 'pura calidad']
-const DJ_BANNED = '¿a poco no se antoja?, ¿a poco no?, se antoja, bien a gusto, la neta se va a poner buena, va que va'
+  'esto pega', 'bien sabrosón', 'para el alma', 'sin miedo', 'arre', 'échale', 'pura calidad',
+  'qué joyita', 'me encanta', 'puro sentimiento', 'pa llorar bonito', 'con todo el power', 'ufff', 'qué temazo',
+  'esta sí', 'te va a gustar', 'pa los compas', 'ni cómo ayudarte', 'de las buenas', 'sin pena', 'bien recio',
+  'a todo volumen', 'pa la banda', 'está de poca', 'qué onda con esta', 'joya', 'qué viaje', 'bien prendido',
+  'pa que se te quite lo aguado', 'como debe ser', 'directo al corazón', 'qué rolón']
+const DJ_BANNED = '¿a poco no se antoja?, ¿a poco no?, ¿a poco no está buenísima?, se antoja, bien a gusto, ' +
+  'la neta se va a poner buena, la neta te va a encantar, va que va, arrancamos con, cambiamos de vibra, ' +
+  'esta rola de X llamada Y, de hace rato, empezar con "Va", empezar con el nombre del usuario'
 let djLines = load('djLines', [])
 let djAngleLog = []
 function djVariety() {
@@ -2018,7 +2042,8 @@ function djVariety() {
   const angle = free[Math.floor(Math.random() * free.length)]
   djAngleLog = [angle, ...djAngleLog].slice(0, 5)
   const slang = [...DJ_SLANG].sort(() => Math.random() - 0.5).slice(0, 2)
-  return `\nEstilo de esta vez: ${angle} Si te late, usa alguna de estas expresiones: ${slang.join(', ')}. ` +
+  const opener = DJ_OPENERS[Math.floor(Math.random() * DJ_OPENERS.length)]
+  return `\nEstilo de esta vez: ${angle} Empieza ${opener}. Si te late, usa alguna de estas expresiones: ${slang.join(', ')}. ` +
     `Prohibido usar: ${DJ_BANNED}.` +
     (djLines.length ? `\nFrases que ya dijiste (NO repitas sus inicios, cierres ni muletillas; que suene distinta): ${djLines.slice(0, 8).join(' | ')}` : '')
 }
@@ -2033,17 +2058,24 @@ const DJ_TEMPLATES = {
     '{saludo}{nombre}. Soy DJ Nat y son las {hora}. Empecemos con una playlist que te hice: {vibra}, y abre {artista}.',
   ],
   intro: [
-    '¡Qué onda! Vamos a arrancar con {vibra}, y para abrir, {artista}.',
-    'Va, hoy toca {vibra}. Empezamos con {cancion} de {artista}.',
+    '¡Qué onda! Hoy el ambiente huele a {vibra}, y abre {artista}.',
+    'Hoy toca {vibra}. Para empezar, {cancion} de {artista}.',
+    '¡Atención! {artista} abre esta selección de {vibra}.',
+    'Ya estamos al aire con {vibra}. Primero, {cancion}.',
   ],
   next: [
-    'Va, cambiamos tantito el rollo: ahora {vibra}. Arrancamos con {artista}.',
-    'Seguimos. Lo que sigue es {vibra}, y abre {artista} con {cancion}.',
-    'Ahí te va un bloque de {vibra}. Empezamos con {artista}, ¿a poco no?',
+    'Ahora le toca a {vibra}. Abre {artista}, súbele.',
+    'Lo que sigue es {vibra}, y {artista} viene con {cancion}.',
+    'Ahí te va un bloque de {vibra}. {artista} pone el ambiente.',
+    '¿Listo? Ahora va {vibra} con {cancion} de {artista}.',
+    'Oye, esto pega: {cancion} de {artista}, puro {vibra}.',
+    'Uff, viene {artista} con {cancion}. Que no pare el {vibra}.',
   ],
   switch: [
-    '¡Sale! Otra vibra: {vibra}. Va {artista}.',
-    'Entendido, cambiamos. Ahora, {vibra}, con {cancion} de {artista}.',
+    '¡Sale! Otro rollo: {vibra}. Va {artista}.',
+    'Cambio de aires: {vibra}, con {cancion} de {artista}.',
+    'Lo que pidas. Ahora suena {vibra}, empezando por {artista}.',
+    '¡Uy, buena elección! {vibra} con {cancion}.',
   ],
 }
 
@@ -2086,20 +2118,21 @@ async function djLine(kind, block) {
     f.nombre = userName || undefined
     // ahead: se prepara unos segundos antes de que acabe la canción; la hora es la de cuando hable
     f.hora = new Date(Date.now() + (block.ahead || 0)).toLocaleTimeString('es-MX', { hour: 'numeric', minute: '2-digit', hour12: true })
-    task += ' Esta vez, de forma natural, dile su nombre (si lo hay) y la hora tal cual viene en los datos (con números).'
+    const where = ['a la mitad de la frase', 'al final', 'al principio pero sin empezar con su nombre', 'como comentario al pasar'][Math.floor(Math.random() * 4)]
+    task += ` Esta vez dile su nombre (si lo hay) y la hora tal cual viene en los datos (con números), ${where}.`
     block.timed = Date.now()
   } else if (transition) {
     // De vez en cuando, algo personal o el día, para que no suene siempre igual
     const roll = Math.random(), fact = roll < 0.3 && personalFact()
     if (fact) {
       f.dato_personal = fact
-      task += ' Menciona de forma natural el dato personal (ej. "esta semana no has soltado a…").'
+      task += ' Menciona el dato personal con tus propias palabras.'
     } else if (roll >= 0.3 && roll < 0.5) {
       f.dia = DAYS[new Date().getDay()]
-      task += ' Menciona el día de forma natural (ej. "pa ambientar este lunes").'
+      task += ' Menciona el día con tus propias palabras.'
     } else if (roll >= 0.5 && roll < 0.65 && weather?.kind) {
       f.clima = weatherText()
-      task += ' Comenta el clima de forma natural (ej. "con esta lluvia se antoja…").'
+      task += ' Comenta el clima con tus propias palabras.'
     }
   }
   if (dj.ai) {
@@ -2281,6 +2314,7 @@ async function djPlay(block, prepared, after) {
   dj.thinking = !ready
   renderDjPanel()
   const line = prepared?.line ?? await djLine(block.kind, block)
+  if (block.timed) dj.sinceHello = 0
   if (!dj.on) { dj.thinking = false; renderDjPanel(); return }
   let started = false
   const startMusic = () => {
