@@ -34,6 +34,14 @@ module.exports = function createGemini(dir) {
   const SETTINGS_PATH = path.join(dir, 'gemini.json')
   const VOICE_DIR     = path.join(dir, 'dj-voice')
   const settings = readJson(SETTINGS_PATH, {})
+  // Registro de cuándo la voz nativa falla o se usa el respaldo (que gasta las 10 diarias)
+  const LOG_PATH = path.join(dir, 'dj-voice.log')
+  function log(event, detail, text) {
+    try {
+      if (fs.existsSync(LOG_PATH) && fs.statSync(LOG_PATH).size > 200000) fs.renameSync(LOG_PATH, LOG_PATH + '.old')
+      fs.appendFileSync(LOG_PATH, `${new Date().toLocaleString('es-MX')}\t${event}\t${detail}\t${String(text).slice(0, 120)}\n`)
+    } catch {}
+  }
   // Audios de un solo uso (frases en las que la voz improvisó) de sesiones anteriores
   try { for (const f of fs.readdirSync(VOICE_DIR)) if (f.startsWith('tmp-')) fs.rmSync(path.join(VOICE_DIR, f), { force: true }) } catch {}
   let ttsChain = Promise.resolve()
@@ -67,17 +75,17 @@ module.exports = function createGemini(dir) {
     return j
   }
 
-  // Voz por la API en vivo: se abre una sesión, se manda el texto y se junta el audio que
-  // regresa. onChunk recibe cada pedazo (PCM 16 bits, 24 kHz) en cuanto llega.
-  // Se resuelve con { pcm, said } — said es la transcripción de lo que dijo de verdad
-  function liveSpeak(text, onChunk) {
+  // Sesión de la API en vivo. Se abre una vez por frase y se le mandan las oraciones como
+  // turnos: Google limita cuántas sesiones se abren por minuto, no cuántos turnos.
+  // speak(texto, onChunk) se resuelve con el PCM (16 bits, 24 kHz) de ese turno; onChunk
+  // recibe cada pedazo en cuanto llega. said() es la transcripción de todo lo que dijo.
+  function openLive() {
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(`${LIVE_URL}?key=${encodeURIComponent(settings.key)}`)
-      const pcm = []
-      let said = ''
-      // partial: ya se mandó audio a reproducir, así que no se puede cambiar a otra voz
-      const fail = err => { clearTimeout(timer); try { ws.terminate() } catch {} reject(Object.assign(new Error(err), { partial: pcm.length > 0 })) }
-      const timer = setTimeout(() => fail('network'), 60000)
+      let ready = false, closed = false, turn = null, said = ''
+      const errOf = (code, reason) => code === 1008 ? 'invalid-key'
+        : /quota|exhaust/i.test(String(reason)) ? 'quota' : 'network'
+      const setupTimer = setTimeout(() => ws.terminate(), 15000)
       ws.on('open', () => ws.send(JSON.stringify({ setup: {
         model: 'models/' + LIVE_MODEL,
         // Temperatura baja: que actúe el texto, no que improvise
@@ -89,33 +97,59 @@ module.exports = function createGemini(dir) {
       ws.on('message', raw => {
         let m
         try { m = JSON.parse(raw) } catch { return }
-        if (m.setupComplete) {
-          ws.send(JSON.stringify({ clientContent: { turns: [{ role: 'user', parts: [{ text }] }], turnComplete: true } }))
-          return
-        }
+        if (m.setupComplete) { ready = true; clearTimeout(setupTimer); resolve(session); return }
+        if (m.serverContent?.outputTranscription?.text) said += m.serverContent.outputTranscription.text
+        if (!turn) return
         for (const p of m.serverContent?.modelTurn?.parts || []) {
           if (!p.inlineData) continue
           const buf = Buffer.from(p.inlineData.data, 'base64')
-          pcm.push(buf)
-          onChunk?.(buf)
+          turn.pcm.push(buf)
+          turn.onChunk?.(buf)
         }
-        if (m.serverContent?.outputTranscription?.text) said += m.serverContent.outputTranscription.text
         if (m.serverContent?.turnComplete) {
-          clearTimeout(timer)
-          // La transcripción llega un poco después que el audio: se espera un momento
-          setTimeout(() => {
-            ws.close()
-            pcm.length ? resolve({ pcm: Buffer.concat(pcm), said }) : reject(new Error('network'))
-          }, 700)
+          const t = turn
+          turn = null
+          clearTimeout(t.timer)
+          t.resolve(Buffer.concat(t.pcm))
         }
       })
-      ws.on('close', code => { if (code === 1008 || code === 1011) fail(code === 1008 ? 'invalid-key' : 'quota') })
-      ws.on('error', () => fail('network'))
+      // Cualquier cierre inesperado se nota al instante (antes se quedaba esperando 60 s)
+      ws.on('close', (code, reason) => {
+        closed = true
+        const err = new Error(errOf(code, reason))
+        if (!ready) { clearTimeout(setupTimer); reject(err) }
+        if (turn) { const t = turn; turn = null; clearTimeout(t.timer); t.reject(Object.assign(err, { partial: t.pcm.length > 0 })) }
+      })
+      ws.on('error', () => {})   // siempre le sigue 'close'
+      const session = {
+        speak(text, onChunk) {
+          return new Promise((res, rej) => {
+            if (closed) return rej(new Error('network'))
+            turn = { onChunk, pcm: [], resolve: res, reject: rej, timer: setTimeout(() => ws.terminate(), 30000) }
+            ws.send(JSON.stringify({ clientContent: { turns: [{ role: 'user', parts: [{ text }] }], turnComplete: true } }))
+          })
+        },
+        said: () => said,
+        close: () => { closed = true; try { ws.close() } catch {} },
+      }
     })
+  }
+
+  // Abre sesión; si Google dice que se pasó del límite por minuto, espera y reintenta
+  async function openLiveRetry(text) {
+    for (let attempt = 1; ; attempt++) {
+      try { return await openLive() }
+      catch (e) {
+        log('falló', `abrir sesión (intento ${attempt}): ${e.message}`, text)
+        if (e.message === 'invalid-key' || attempt === 3) throw e
+        await sleep(e.message === 'quota' ? 12000 : 1000)
+      }
+    }
   }
 
   async function ttsSpeak(model, text) {
     lastCall[model] = Date.now()
+    log('respaldo', model, text)
     const j = await request(model, {
       contents: [{ parts: [{ text }] }],
       generationConfig: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICE } } } },
@@ -146,54 +180,31 @@ module.exports = function createGemini(dir) {
     return extra <= Math.max(2, got.length * 0.2) && missing <= Math.max(1, want.length * 0.25)
   }
 
-  // Oraciones cortas: la voz nativa se brinca o corta partes cuando el texto es largo
-  function splitSentences(text) {
-    const out = []
-    // "feat." / "ft." no terminan una oración
-    const clean = text.replace(/\b(feat|ft|prod|vs|vol)\./gi, '$1')
-    for (const s of clean.match(/[^.!?…]+[.!?…]*\s*/g) || [clean]) {
-      const t = s.trim()
-      if (!t) continue
-      // Pedacitos de menos de 4 palabras ("A darle con todo.") van con la oración anterior
-      if (out.length && t.split(/\s+/).length < 4) out[out.length - 1] += ' ' + t
-      else out.push(t)
-    }
-    return out
-  }
-
-  // Todas las oraciones se generan a la vez (la API en vivo no tiene límite) y se emiten en
-  // orden: la primera suena en cuanto llega y las demás ya están listas cuando les toca, así
-  // que da tiempo de revisarlas y regenerar la que salga mal antes de que suene.
+  // Una sesión por frase con el texto completo (en turnos separados la voz se pone a
+  // platicar y deja pausas). Sin streaming (frases preparadas) se repite una vez si salió
+  // distinta al texto; con streaming ya sonó, así que sólo se evita guardarla en caché.
   async function liveSay(text, onChunk) {
-    const GAP = Buffer.alloc(Math.round(24000 * 0.12) * 2)   // respiro entre oraciones
-    const parts = splitSentences(text).map(t => ({ text: t, chunks: [], emitted: 0, done: false, ok: true }))
-    let cur = 0
-    const pump = () => {
-      while (cur < parts.length) {
-        const p = parts[cur]
-        while (p.emitted < p.chunks.length) onChunk?.(p.chunks[p.emitted++])
-        if (!p.done) return
-        if (cur < parts.length - 1 && p.emitted) onChunk?.(GAP)
-        cur++
+    const tries = onChunk ? 1 : 2
+    for (let attempt = 1; ; attempt++) {
+      const session = await openLiveRetry(text)
+      let emitted = false
+      try {
+        const buf = await session.speak(text, b => { emitted = true; onChunk?.(b) })
+        if (!buf.length) throw new Error('network')
+        await sleep(700)   // la transcripción llega un poco después que el audio
+        const ok = faithful(text, session.said())
+        if (ok || attempt >= tries) {
+          if (!ok) log('distinta', `dijo: ${session.said()}`, text)
+          return { wav: pcmToWav(buf, 24000), ok }
+        }
+        log('repetida', `dijo: ${session.said()}`, text)
+      } catch (e) {
+        log('falló', `intento ${attempt}: ${e.message}`, text)
+        if (emitted || attempt >= 2 || e.message === 'invalid-key') throw Object.assign(e, { partial: emitted })
+      } finally {
+        session.close()
       }
     }
-    const run = async p => {
-      for (let attempt = 0; attempt < 2; attempt++) {
-        p.chunks = []
-        const { said } = await liveSpeak(p.text, buf => { p.chunks.push(buf); pump() })
-        p.ok = faithful(p.text, said)
-        // Si salió mal y todavía no ha sonado nada de ella, se genera otra vez
-        if (p.ok || p.emitted > 0) break
-        console.warn('DJ: oración repetida por', JSON.stringify(p.text), '→', JSON.stringify(said))
-      }
-      p.done = true
-      pump()
-    }
-    const results = await Promise.allSettled(parts.map(run))
-    const failed = results.find(r => r.status === 'rejected')
-    if (failed) throw Object.assign(failed.reason, { partial: parts.some(p => p.emitted > 0) })
-    const pcm = Buffer.concat(parts.flatMap((p, i) => i < parts.length - 1 ? [...p.chunks, GAP] : p.chunks))
-    return { wav: pcmToWav(pcm, 24000), ok: parts.every(p => p.ok) }
   }
 
   async function say(text, onChunk) {
