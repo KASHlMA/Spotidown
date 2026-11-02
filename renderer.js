@@ -1270,7 +1270,7 @@ function collectionFor(v) {
   const g = getGroups()
   switch (v.name) {
     case 'songs':
-      return { type: 'Playlist', title: 'Todas las canciones', songs: allSongs, tile: 'tile-songs', icon: I.note, color: [16, 120, 80] }
+      return { type: 'Playlist', title: 'Todas las canciones', songs: allSongs, tile: 'tile-songs', icon: I.note, color: [150, 20, 30] }
     case 'liked':
       return { type: 'Playlist', title: 'Tus me gusta', songs: likedSongs(), tile: 'tile-liked', icon: I.heartFill, color: [80, 56, 160],
                empty: 'Las canciones que te gusten aparecerán aquí. Toca el ♥ en cualquier canción para guardarla.' }
@@ -2837,9 +2837,9 @@ function renderDjPanel() {
 // las agranda y las agita; pensando giran más rápido. Sólo se dibuja con el panel abierto.
 const orb = { cv: $('dj-orb-cv'), level: 0, think: 0, t: 0, last: 0, raf: 0 }
 const ORB_LAYERS = [
-  { c: ['#ff5fd2', '#a42cff'], r: 0.78, spd: 0.9, ph: 0 },
-  { c: ['#6a5cff', '#1e90ff'], r: 0.70, spd: -1.2, ph: 2.1 },
-  { c: ['#ff9a3c', '#ff3c7e'], r: 0.58, spd: 1.6, ph: 4.2 },
+  { c: ['#ff5a4f', '#c4101f'], r: 0.78, spd: 0.9, ph: 0 },
+  { c: ['#ff2f6a', '#8a0a2a'], r: 0.70, spd: -1.2, ph: 2.1 },
+  { c: ['#ffa04a', '#e8333c'], r: 0.58, spd: 1.6, ph: 4.2 },
 ]
 const orbBuf = new Float32Array(1024)
 function voiceLevel() {
@@ -3011,7 +3011,7 @@ function drawSpectrum() {
   }
   ctx2d.clearRect(0, 0, W, H)
   analyser.getByteFrequencyData(fftData)
-  ctx2d.fillStyle = '#1ed760'
+  ctx2d.fillStyle = '#e8333c'
 
   const gap = 2
   const bw  = (W - gap * (BAR_COUNT - 1)) / BAR_COUNT
