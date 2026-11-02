@@ -3509,6 +3509,7 @@ $('btn-lyrics').addEventListener('click', () => {
 })
 
 $('btn-home').addEventListener('click', () => navigate({ name: 'home' }))
+$('app-logo').addEventListener('click', () => navigate({ name: 'home' }))
 $('btn-back').addEventListener('click', goBack)
 $('btn-fwd').addEventListener('click',  goForward)
 

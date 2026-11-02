@@ -51,11 +51,12 @@ img { display: block; }
   gap: 8px; padding: 0 0 0 16px; -webkit-app-region: drag;
 }
 .tb-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.app-logo { display: flex; align-items: center; gap: 8px; margin-right: 16px; font-weight: 800; font-size: 15px; letter-spacing: -.2px; }
-.logo-dot {
-  width: 32px; height: 32px; border-radius: 50%; background: var(--accent); color: #fff;
-  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+.app-logo {
+  display: flex; align-items: center; margin-right: 12px; border-radius: 50%; cursor: pointer;
+  -webkit-app-region: no-drag; transition: transform .15s, filter .15s;
 }
+.app-logo:hover { transform: scale(1.07); filter: brightness(1.1); }
+.app-logo:active { transform: scale(.96); }
 .tb-nav {
   width: 32px; height: 32px; border-radius: 50%; background: var(--panel); color: var(--t2);
   display: flex; align-items: center; justify-content: center; -webkit-app-region: no-drag;
@@ -675,5 +676,4 @@ body.is-playing .eq i { animation: eq .8s ease-in-out infinite alternate; }
   .sb-header span, .sb-chips, .lib-text, .lib-list li .lib-playing, .lib-status { display: none !important; }
   .sb-header { justify-content: center; padding: 18px 0 8px; }
   .lib-list li { justify-content: center; }
-  .logo-text { display: none; }
 }
