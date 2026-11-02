@@ -1859,11 +1859,14 @@ function buildBlock(pool, n = 5) {
   let cands = pool.filter(s => s !== currentSong && !recent.has(s.path))
   if (cands.length < n) cands = pool.filter(s => s !== currentSong)
   const out = [], perArtist = new Map()
+  // Si el pool es de pocos artistas (p. ej. "pon a Kevin Kaarl") se permiten más por artista
+  const artists = new Set(cands.map(s => splitArtists(s.artist)[0] || ''))
+  const cap = Math.max(2, Math.ceil(n / artists.size))
   while (out.length < n && cands.length) {
     const s = weightedPick(cands, x => 1 + 2 * Math.log1p(affinity(x)) + (likedPaths.has(x.path) ? 1 : 0) + (forgotten(x) ? 2 : 0))
     cands = cands.filter(x => x !== s)
     const a = splitArtists(s.artist)[0] || ''
-    if ((perArtist.get(a) || 0) >= 2) continue
+    if ((perArtist.get(a) || 0) >= cap) continue
     perArtist.set(a, (perArtist.get(a) || 0) + 1)
     out.push(s)
   }
@@ -1883,10 +1886,11 @@ function topArtistWeek() {
 }
 
 function blockFacts(block) {
-  const d = new Date(), first = block.songs[0], p = plays[first.path]
+  const d = new Date(), first = block.songs[0], p = plays[first.path], h = d.getHours()
   const old = block.songs.find(forgotten)
   return {
-    hora: d.toLocaleTimeString('es-MX', { hour: 'numeric', minute: '2-digit' }),
+    // Sólo el momento del día (para el tono), nunca la hora exacta
+    momento: h < 6 ? 'madrugada' : h < 12 ? 'mañana' : h < 19 ? 'tarde' : 'noche',
     dia: DAYS[d.getDay()],
     vibra: block.vibe.name.replace(' · ', ' con mood '),
     primera_cancion: first.title, primer_artista: splitArtists(first.artist)[0] || '',
@@ -1899,22 +1903,23 @@ function blockFacts(block) {
 }
 
 const DJ_SYSTEM =
-  'Eres la diyéi de Spotidown, el reproductor de música personal del usuario. Hablas como locutora de radio mexicana ' +
-  'joven: cálida, carismática y con jerga mexicana natural (la neta, qué onda, va, ¿a poco no?), sin exagerar. ' +
-  'Reglas: de 1 a 3 frases y máximo 40 palabras. Escribe "diyéi" en lugar de DJ. Escribe los números con letra. ' +
+  'Eres la voz que presenta la música en el reproductor personal del usuario, como una locutora de radio mexicana ' +
+  'joven: cálida, carismática y con jerga mexicana natural (la neta, va, ¿a poco no?), sin exagerar. ' +
+  'Reglas: de 1 a 2 frases y máximo 30 palabras. Se escribe "rola" (con una sola ele). NUNCA te presentes ni te nombres (no digas DJ, diyéi, "aquí tu…", ' +
+  '"soy tu…"). NO saludes salvo que te lo pidan. NUNCA digas la hora ni el día. Ve directo a la música. ' +
   'Usa sólo los datos que te dan; no inventes canciones, artistas ni datos. Sin emojis, comillas, asteriscos ni ' +
   'listas. Háblale de tú. Varía tus frases: no empieces siempre igual.'
 
 const DJ_TASK = {
-  intro:   'Saluda (es el inicio de la sesión) y presenta el primer bloque.',
-  next:    'Haz la transición: presenta el siguiente bloque como en la radio.',
-  switch:  'El usuario pidió cambiar de vibra. Confírmalo con buena onda y presenta el nuevo bloque.',
+  intro:   'Es la primera canción de la sesión: un saludo muy corto (dos o tres palabras) y presenta el bloque.',
+  next:    'Haz la transición al siguiente bloque como en la radio, sin saludar.',
+  switch:  'El usuario pidió cambiar de vibra. Confírmalo con buena onda y presenta el nuevo bloque, sin saludar.',
 }
 
 const DJ_TEMPLATES = {
   intro: [
-    '¡Qué onda! Aquí tu diyéi. Vamos a arrancar con {vibra}, y para abrir, {artista}.',
-    '¡Hola, hola! Es {dia} y ya estoy lista. Te traigo {vibra}, empezando con {cancion} de {artista}.',
+    '¡Qué onda! Vamos a arrancar con {vibra}, y para abrir, {artista}.',
+    'Va, hoy toca {vibra}. Empezamos con {cancion} de {artista}.',
   ],
   next: [
     'Va, cambiamos tantito el rollo: ahora {vibra}. Arrancamos con {artista}.',
@@ -1934,22 +1939,31 @@ function templateLine(kind, f) {
     .replace('{cancion}', f.primera_cancion).replace('{dia}', f.dia)
 }
 
+// Lo que escribe la IA antes de pasarlo a voz: sin comillas ni asteriscos, "rola" bien escrito
+function cleanLine(t) {
+  return String(t).replace(/[*"“”]/g, '').replace(/\brollas?\b/gi, m => m.replace(/ll/i, 'l')).trim()
+}
+
 async function djLine(kind, block) {
   const f = blockFacts(block)
   if (dj.ai) {
     const r = await api.djThink(DJ_SYSTEM, `${DJ_TASK[kind] || DJ_TASK.next}\nDatos: ${JSON.stringify(f)}`)
-    if (r.ok) return r.ok.replace(/[*"“”]/g, '').trim()
+    if (r.ok) return cleanLine(r.ok)
   }
   return templateLine(kind, f)
 }
 
-// Texto → archivo de voz (Gemini). null si no hay o se acabó el límite: se usa la voz de Windows.
+// Texto → archivo de voz. 'laomedeia' (Gemini) sólo da 10 frases al día gratis;
+// 'dalia' (Edge) no tiene límite. Si todo falla (sin internet) se usa la voz de Windows.
+let djVoicePref = load('djVoice', 'dalia')
 async function djVoice(text) {
-  if (!dj.ai || Date.now() < dj.ttsOffUntil) return null
-  const r = await api.djSay(text)
-  if (r.ok) return r.ok
-  if (r.error === 'quota') dj.ttsOffUntil = Date.now() + 10 * 60 * 1000
-  return null
+  if (djVoicePref === 'laomedeia' && dj.ai && Date.now() >= dj.ttsOffUntil) {
+    const r = await api.djSay(text, 'gemini')
+    if (r.ok) return r.ok
+    if (r.error === 'quota') dj.ttsOffUntil = Date.now() + 60 * 60 * 1000
+  }
+  const r = await api.djSay(text, 'dalia')
+  return r.ok || null
 }
 
 // Mientras el DJ habla, la música baja
@@ -2122,10 +2136,12 @@ async function poolFromPlan(plan) {
     const both = pool ? new Set([...pool].filter(s => m.has(s))) : m
     pool = both.size >= 5 ? both : (pool ? new Set([...pool, ...m]) : m)
   }
+  // Si pidió artistas, son SUS canciones (filtradas por género/mood sólo si así quedan suficientes)
   const wanted = new Set((plan.artists || []).map(fold))
   if (wanted.size) {
     const bySinger = allSongs.filter(s => splitArtists(s.artist).some(a => wanted.has(fold(a))))
-    pool = pool ? new Set([...pool, ...bySinger]) : new Set(bySinger)
+    const both = pool ? bySinger.filter(s => pool.has(s)) : []
+    if (bySinger.length) pool = new Set(both.length >= 4 ? both : bySinger)
   }
   if (plan.similar_to) {
     const m2 = searchMatches(plan.similar_to)
@@ -2151,7 +2167,10 @@ async function djAsk(text) {
   let plan = null
   if (dj.ai) {
     const r = await api.djThink(
-      DJ_SYSTEM + ' Ahora el usuario te pide algo: elige qué poner usando SÓLO los ids y artistas de la lista y contéstale.',
+      DJ_SYSTEM + ' Ahora el usuario te pide algo: elige qué poner usando SÓLO los ids y artistas de la lista y ' +
+      'contéstale directo, sin saludar ni presentarte (ej. "¡Va! Unos corriditos pa la peda, cero reggaetón"). ' +
+      'Si pide algo "como", "parecido a" o "tipo" un artista o canción, pon ese nombre en similar_to y NO en artists; ' +
+      'usa artists sólo si pide escuchar a ese artista.',
       `${catalogText()}\n\nPetición del usuario: ${text}`, REQ_SCHEMA)
     if (r.ok) plan = r.ok
   }
@@ -2165,7 +2184,7 @@ async function djAsk(text) {
     return
   }
   const block = { kind: 'request', vibe: { key: 'req:' + fold(plan.title || text), name: plan.title || text }, songs: buildBlock(pool, 6) }
-  const line = (plan.reply || `¡Va! Te pongo ${block.vibe.name}.`).replace(/[*"“”]/g, '').trim()
+  const line = cleanLine(plan.reply || `¡Va! Te pongo ${block.vibe.name}.`)
   if (rightMode !== 'dj') setRight('dj')
   await djPlay(block, { line })
 }
@@ -2175,8 +2194,8 @@ function renderDjPanel() {
   if (rightMode !== 'dj') return
   $('dj-orb').classList.toggle('speaking', dj.speaking)
   $('dj-orb').classList.toggle('thinking', dj.thinking)
-  $('dj-vibe').textContent = dj.thinking ? 'El diyéi está pensando…'
-    : dj.on && dj.vibe ? `Sonando: ${dj.vibe.name}` : 'Tu diyéi personal'
+  $('dj-vibe').textContent = dj.thinking ? 'El DJ está pensando…'
+    : dj.on && dj.vibe ? `Sonando: ${dj.vibe.name}` : 'Tu DJ personal'
   $('dj-start').textContent = dj.on ? 'Detener DJ' : 'Iniciar DJ'
   $('dj-switch').hidden = !dj.on
   const ul = $('dj-log')

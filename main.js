@@ -8,6 +8,7 @@ const MUSIC_DIR = app.getPath('music')
 const CACHE_PATH = path.join(app.getPath('userData'), 'music-cache.json')
 const lastfm = createLastfm(app.getPath('userData'))
 const gemini = createGemini(app.getPath('userData'))
+const voice  = require('./voice')(app.getPath('userData'))
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -251,7 +252,8 @@ ipcMain.handle('audio-analyze', (_, files) => {
 const wrap = fn => (_, ...a) => fn(...a).then(v => ({ ok: v }), e => ({ error: e.message }))
 ipcMain.handle('gemini-status',  () => ({ hasKey: gemini.hasKey() }))
 ipcMain.handle('gemini-set-key', (_, key) => gemini.setKey(key))
-ipcMain.handle('dj-say',   wrap(text => gemini.say(text)))
+// engine: 'gemini' (Laomedeia, 10 frases al día gratis) o 'dalia' (Edge, sin límite)
+ipcMain.handle('dj-say',   wrap((text, engine) => engine === 'gemini' ? gemini.say(text) : voice.say(text)))
 ipcMain.handle('dj-think', wrap((system, prompt, schema) => gemini.think(system, prompt, schema)))
 
 ipcMain.on('open-external', (_, url) => {

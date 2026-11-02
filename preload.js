@@ -14,7 +14,7 @@ contextBridge.exposeInMainWorld('api', {
   openExternal:     (url)     => ipcRenderer.send('open-external', url),
   geminiStatus:     ()        => ipcRenderer.invoke('gemini-status'),
   geminiSetKey:     (key)     => ipcRenderer.invoke('gemini-set-key', key),
-  djSay:            (text)    => ipcRenderer.invoke('dj-say', text),
+  djSay:            (text, engine) => ipcRenderer.invoke('dj-say', text, engine),
   djThink:          (sys, prompt, schema) => ipcRenderer.invoke('dj-think', sys, prompt, schema),
   audioCached:      ()        => ipcRenderer.invoke('audio-cached'),
   audioAnalyze:     (files)   => ipcRenderer.invoke('audio-analyze', files),
