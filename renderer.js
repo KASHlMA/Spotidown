@@ -2265,22 +2265,71 @@ async function djStart() {
 // Se graban con calma (y revisados) mientras usas la app y se guardan para siempre, así al
 // iniciar a DJ Nat siempre hay uno listo para sonar al instante, aunque acabes de abrir la app.
 const GREETINGS = {
-  madrugada: ['¡Qué onda, {n}! Aquí DJ Nat, desvelándome contigo.', '¡Buenas noches, {n}! Soy DJ Nat, ¿otra vez desvelándonos?'],
-  manana:    ['¡Buenos días, {n}! Soy DJ Nat, ¿cómo amaneciste?', '¡Buen día, {n}! Aquí DJ Nat, lista pa arrancar contigo.'],
-  tarde:     ['¡Buenas tardes, {n}! Soy DJ Nat, qué gusto tenerte de vuelta.', '¡Qué onda, {n}! Aquí DJ Nat, ¿cómo va esa tarde?'],
-  noche:     ['¡Buenas noches, {n}! Soy DJ Nat, qué bueno que llegaste.', '¡Qué onda, {n}! Aquí DJ Nat pa acompañarte esta noche.'],
+  madrugada: [
+    '¡Qué onda, {n}! Aquí DJ Nat, desvelándome contigo.',
+    '¡Buenas noches, {n}! Soy DJ Nat, ¿otra vez desvelándonos?',
+    '¡Hey, {n}! DJ Nat en la madrugada, aquí seguimos al pie del cañón.',
+    '¡{n}! Aquí DJ Nat, pa la desvelada no hay nada como buena música.',
+    'Qué onda, {n}, DJ Nat al habla. La noche todavía no se acaba.',
+  ],
+  manana: [
+    '¡Buenos días, {n}! Soy DJ Nat, ¿cómo amaneciste?',
+    '¡Buen día, {n}! Aquí DJ Nat, lista pa arrancar contigo.',
+    '¡Buenos días, {n}! DJ Nat reportándose, vamos a empezar con todo.',
+    '¡Arriba, {n}! Aquí DJ Nat pa despertarte con buena música.',
+    '¡Qué tal, {n}! DJ Nat por acá, ¿ya con tu cafecito?',
+  ],
+  tarde: [
+    '¡Buenas tardes, {n}! Soy DJ Nat, qué gusto tenerte de vuelta.',
+    '¡Qué onda, {n}! Aquí DJ Nat, ¿cómo va esa tarde?',
+    '¡Buenas tardes, {n}! DJ Nat al habla, vamos a ponerle sabor al día.',
+    '¡Hey, {n}! Aquí DJ Nat, ¿cómo te está tratando la tarde?',
+    '¡{n}, qué gusto! Soy DJ Nat, ya te tenía unas rolas preparadas.',
+  ],
+  noche: [
+    '¡Buenas noches, {n}! Soy DJ Nat, qué bueno que llegaste.',
+    '¡Qué onda, {n}! Aquí DJ Nat pa acompañarte esta noche.',
+    '¡Buenas noches, {n}! DJ Nat en cabina, ¿cómo estuvo tu día?',
+    '¡Hey, {n}! Aquí DJ Nat, la noche apenas empieza.',
+    '¡{n}! Soy DJ Nat, ya te estaba esperando pa la noche.',
+  ],
+}
+// Especiales según el día de la semana (0 = domingo … 6 = sábado), además de los de arriba
+const GREETINGS_DAY = {
+  0: { tarde: ['¡Buenas tardes, {n}! DJ Nat aquí, domingo tranquilo y con buena música.'],
+       noche: ['¡Buenas noches, {n}! Soy DJ Nat, cerremos el domingo bien bonito.'] },
+  1: { manana: ['¡Buenos días, {n}! DJ Nat aquí, ánimo que ya es lunes.',
+                '¡Feliz lunes, {n}! Soy DJ Nat, vamos a empezar la semana con todo.'] },
+  5: { tarde: ['¡Ya es viernes, {n}! Aquí DJ Nat, esto ya huele a fin de semana.'],
+       noche: ['¡Viernes en la noche, {n}! Soy DJ Nat y hoy se arma.'] },
+  6: { noche: ['¡Sábado, {n}! DJ Nat aquí, hoy es noche de fiesta.',
+               '¡Qué onda, {n}! Aquí DJ Nat, sábado en la noche y con ganas de bailar.'],
+       madrugada: ['¡Sábado de desvelo, {n}! Aquí DJ Nat, la fiesta sigue.'] },
 }
 const partOfDay = (h = new Date().getHours()) => h < 6 ? 'madrugada' : h < 12 ? 'manana' : h < 19 ? 'tarde' : 'noche'
-const greetingText = t => userName ? t.replace('{n}', userName) : t.replace(', {n}', '')
+// Sin nombre: "¡{n}! Soy…" → "Soy…", "¡{n}, qué gusto!" → "¡Qué gusto!", ", {n}" se quita
+const greetingText = t => userName ? t.replaceAll('{n}', userName)
+  : t.replace(/¡\{n\}! /, '').replace(/¡\{n\}, (\S)/, (m, c) => '¡' + c.toUpperCase()).replace(/, \{n\}/g, '')
+const greetingsNow = (d = new Date()) => {
+  const part = partOfDay(d.getHours())
+  return [...GREETINGS[part], ...(GREETINGS_DAY[d.getDay()]?.[part] || [])].map(greetingText)
+}
 
 async function cachedGreeting() {
   if (!dj.ai) return null
+  const last = load('djLastGreeting', '')
   const ready = []
-  for (const t of GREETINGS[partOfDay()].map(greetingText)) if (await api.djCached(t)) ready.push(t)
-  if (!ready.length) return null
-  const text = ready[Math.floor(Math.random() * ready.length)]
+  for (const t of greetingsNow()) if (await api.djCached(t)) ready.push(t)
+  // Si hay de dónde escoger, no repite el de la vez pasada; los del día especial pesan más
+  const pool = ready.length > 1 ? ready.filter(t => t !== last) : ready
+  if (!pool.length) return null
+  const special = pool.filter(t => !GREETINGS[partOfDay()].map(greetingText).includes(t))
+  const pickFrom = special.length && Math.random() < 0.6 ? special : pool
+  const text = pickFrom[Math.floor(Math.random() * pickFrom.length)]
   const r = await api.djSay(text, 'gemini')   // en caché: al instante
-  return r.ok ? { text, file: r.ok } : null
+  if (!r.ok) return null
+  save('djLastGreeting', text)
+  return { text, file: r.ok }
 }
 
 // Graba los que falten, empezando por los de este momento del día, espaciados para no
@@ -2290,13 +2339,13 @@ async function warmGreetings() {
   if (greetWarming || !dj.ai) return
   greetWarming = true
   try {
-    const now = partOfDay()
-    for (const p of [now, ...Object.keys(GREETINGS).filter(k => k !== now)]) {
-      for (const t of GREETINGS[p].map(greetingText)) {
-        if (await api.djCached(t)) continue
-        await api.djSay(t, 'gemini')
-        await new Promise(r => setTimeout(r, 30000))
-      }
+    // Primero los de este momento (y los especiales de hoy), luego todos los demás
+    const all = [...greetingsNow(), ...Object.values(GREETINGS).flat(),
+                 ...Object.values(GREETINGS_DAY).flatMap(d => Object.values(d).flat())].map(greetingText)
+    for (const t of [...new Set(all)]) {
+      if (await api.djCached(t)) continue
+      await api.djSay(t, 'gemini')
+      await new Promise(r => setTimeout(r, 30000))
     }
   } finally {
     greetWarming = false
