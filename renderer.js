@@ -1835,7 +1835,8 @@ function timeBoost(id) {
 // Una vibra es un género, a veces combinado con un mood ("Corridos · Triste / Despecho").
 // Los moods solos mezclan estilos que no pegan entre sí, por eso siempre van con un género.
 // avoid: vibras que no se excluyen pero pesan mucho menos (p. ej. con la que arrancó la vez pasada)
-function pickVibe(exclude = [], avoid = []) {
+// uniform: todos los géneros con la misma probabilidad (para arrancar el DJ)
+function pickVibe(exclude = [], avoid = [], uniform = false) {
   const gg = getGenreGroups()
   // Logaritmo: si no, un género con muchas canciones escuchadas (cumbia) ganaba casi siempre
   const score = songs => { let a = 0; for (const s of songs) a += affinity(s); return 1 + Math.log1p(a) }
@@ -1844,7 +1845,7 @@ function pickVibe(exclude = [], avoid = []) {
   const excludeGenres = exclude.map(k => k.split('+')[0])
   const genres = gg.genres.filter(g => g.songs.length >= 8 && !excludeGenres.includes(g.key))
   if (!genres.length) return null
-  const genre = weightedPick(genres, g => score(g.songs) * timeBoost(g.key) *
+  const genre = uniform ? genres[Math.floor(Math.random() * genres.length)] : weightedPick(genres, g => score(g.songs) * timeBoost(g.key) *
     (dj.recent.includes(g.key) ? 0.15 : 1) * (avoid.includes(g.key) ? 0.2 : 1))
   const inGenre = new Set(genre.songs)
   const combos = gg.moods.map(m => ({ m, songs: m.songs.filter(s => inGenre.has(s)) })).filter(c => c.songs.length >= 6)
@@ -1893,16 +1894,11 @@ function buildBlock(pool, n = 5, genre = null) {
   return out
 }
 
-// Vibra para arrancar: lo que estabas escuchando antes ("seguimos con tu mood de hace rato")
-// la mayoría de las veces; si no, una al azar, evitando la misma con la que arrancó la vez pasada
+// Vibra para arrancar: un género al azar (todos igual de probables, no importa cuánto lo
+// escuches), sin repetir los de los últimos 3 arranques
 function startVibe() {
   const starts = load('djStarts', [])
-  const last = currentSong || songByPath.get(recentPaths[0])
-  const gg = getGenreGroups()
-  const g = gg.map.get(last && mainGenre(last))
-  if (g && g.songs.length >= 8 && !starts.includes(g.key) && Math.random() < 0.4) return { ...g, fromRecent: true }
-  // Los de los últimos arranques quedan fuera; si eso deja muy pocos, sólo pesan menos
-  return pickVibe(starts) || pickVibe([], starts)
+  return pickVibe(starts, [], true) || pickVibe([], [], true)
 }
 
 // Lo más escuchado de la semana, para que Nat lo comente de vez en cuando
