@@ -47,9 +47,13 @@
       <div class="sb-header">
         <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M20 2H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-2 5h-3v5.5a2.5 2.5 0 0 1-5 0 2.5 2.5 0 0 1 2.5-2.5c.57 0 1.08.19 1.5.51V5h4v2zM4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6z"/></svg>
         <span>Tu biblioteca</span>
+        <button id="btn-settings" class="sb-gear" title="Géneros y radio (Last.fm)">
+          <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/></svg>
+        </button>
       </div>
       <div class="sb-chips">
         <button class="chip" data-filter="all">Todo</button>
+        <button class="chip" data-filter="genre">Géneros</button>
         <button class="chip" data-filter="artist">Artistas</button>
         <button class="chip" data-filter="album">Álbumes</button>
       </div>
@@ -70,6 +74,14 @@
               <div id="home-recent-albums" class="shelf-row"></div>
             </section>
             <section class="shelf">
+              <div class="shelf-head"><h2>Tus géneros</h2></div>
+              <div id="home-genres" class="shelf-row"></div>
+            </section>
+            <section class="shelf">
+              <div class="shelf-head"><h2>Para tu mood</h2></div>
+              <div id="home-moods" class="shelf-row"></div>
+            </section>
+            <section class="shelf">
               <div class="shelf-head"><h2>Tus artistas favoritos</h2></div>
               <div id="home-artists" class="shelf-row"></div>
             </section>
@@ -77,6 +89,39 @@
               <div class="shelf-head"><h2>Tus álbumes</h2></div>
               <div id="home-albums" class="shelf-row"></div>
             </section>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-search" class="view" hidden>
+        <div class="scroller" id="search-scroll">
+          <div class="search-content">
+            <div class="search-top" id="search-top">
+              <section class="search-best-wrap">
+                <h2 class="search-h">Resultado principal</h2>
+                <div id="search-best"></div>
+              </section>
+              <section class="search-songs-wrap" id="search-songs-wrap">
+                <div class="shelf-head">
+                  <h2 class="search-h">Canciones</h2>
+                  <button class="shelf-more" id="search-all">Mostrar todas</button>
+                </div>
+                <ul id="search-songs" class="mini-list"></ul>
+              </section>
+            </div>
+            <section class="shelf">
+              <div class="shelf-head"><h2>Géneros y moods</h2></div>
+              <div id="search-genres" class="shelf-row"></div>
+            </section>
+            <section class="shelf">
+              <div class="shelf-head"><h2>Artistas</h2></div>
+              <div id="search-artists" class="shelf-row"></div>
+            </section>
+            <section class="shelf">
+              <div class="shelf-head"><h2>Álbumes</h2></div>
+              <div id="search-albums" class="shelf-row"></div>
+            </section>
+            <p class="empty-msg" id="search-empty"></p>
           </div>
         </div>
       </section>
@@ -137,8 +182,10 @@
             <div class="np-title link-plain" id="np-title">Nada sonando</div>
             <div class="np-artist" id="np-artist"></div>
           </div>
+          <button class="like-btn" id="np-radio" title="Radio: canciones parecidas a ésta"></button>
           <button class="like-btn" id="np-like" title="Me gusta"></button>
         </div>
+        <div class="np-genres" id="np-genres"></div>
         <canvas id="spectrum" class="spectrum"></canvas>
         <div class="np-card" id="np-next-card" hidden>
           <div class="np-card-head">
@@ -214,6 +261,27 @@
       </div>
     </div>
   </footer>
+
+  <div class="ctx-menu" id="ctx-menu" hidden></div>
+
+  <div class="modal-back" id="settings" hidden>
+    <div class="modal">
+      <h2>Géneros y radio</h2>
+      <p>Para saber el género y el mood de cada canción, y para armar radios con canciones parecidas, se usa <b>Last.fm</b>. Sólo necesitas una API key gratuita:</p>
+      <ol>
+        <li>Crea una cuenta en Last.fm (o inicia sesión).</li>
+        <li>Llena el formulario de "Create API account" (nombre y descripción, cualquier cosa; el resto vacío).</li>
+        <li>Copia el valor de <b>API key</b> y pégalo aquí abajo.</li>
+      </ol>
+      <button class="modal-link" id="lfm-create">Abrir last.fm/api/account/create ↗</button>
+      <input id="lfm-key" class="modal-input" type="text" placeholder="API key (32 caracteres)" spellcheck="false"/>
+      <p class="modal-msg" id="lfm-msg"></p>
+      <div class="modal-actions">
+        <button class="btn-sec" id="lfm-cancel">Cancelar</button>
+        <button class="btn-pri" id="lfm-save">Guardar</button>
+      </div>
+    </div>
+  </div>
 
   <audio id="audio"></audio>
   <script src="renderer.js"></script>

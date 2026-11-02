@@ -24,6 +24,8 @@ const I = {
   volLow:    '<path d="M7 9v6h4l5 5V4l-5 5H7z"/>',
   volMid:    '<path d="M18.5 12A4.5 4.5 0 0 0 16 7.97v8.05c1.48-.73 2.5-2.25 2.5-4.02zM5 9v6h4l5 5V4L9 9H5z"/>',
   volHigh:   '<path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 7.97v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>',
+  tag:       '<path d="M21.41 11.58l-9-9A2 2 0 0 0 11 2H4a2 2 0 0 0-2 2v7c0 .55.22 1.05.59 1.42l9 9c.36.36.86.58 1.41.58s1.05-.22 1.41-.59l7-7c.37-.36.59-.86.59-1.41s-.23-1.06-.59-1.42zM5.5 7A1.5 1.5 0 1 1 7 5.5 1.5 1.5 0 0 1 5.5 7z"/>',
+  radio:     '<path d="M12 11c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm6 2c0-3.31-2.69-6-6-6s-6 2.69-6 6c0 2.22 1.21 4.15 3 5.19l1-1.74c-1.19-.7-2-1.97-2-3.45 0-2.21 1.79-4 4-4s4 1.79 4 4c0 1.48-.81 2.75-2 3.45l1 1.74c1.79-1.04 3-2.97 3-5.19zM12 3C6.48 3 2 7.48 2 13c0 3.7 2.01 6.92 4.99 8.65l1-1.73C5.61 18.53 4 15.96 4 13c0-4.42 3.58-8 8-8s8 3.58 8 8c0 2.96-1.61 5.53-4 6.92l1 1.73c2.99-1.73 5-4.95 5-8.65 0-5.52-4.48-10-10-10z"/>',
 }
 const svg = (p, s = 16, cls = '') =>
   `<svg${cls ? ` class="${cls}"` : ''} viewBox="0 0 24 24" fill="currentColor" width="${s}" height="${s}">${p}</svg>`
@@ -81,6 +83,11 @@ gainNode.connect(audioCtx.destination)
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function esc(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
+// Minúsculas y sin acentos, para que "cancion" encuentre "canción" (y al revés)
+function fold(s) {
+  return String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
 }
 
 function fmtTime(s) {
@@ -179,6 +186,7 @@ function putImg(el, src) {
 function fillCover(el, songs, icon, onCover) {
   lazyObs.unobserve(el)
   el._lazy = null
+  el._mkey = null   // cancela un mosaico que se estuviera cargando en este elemento
   const withCover = songs.find(s => s.cover)
   if (withCover) { putImg(el, withCover.cover); onCover?.(withCover.cover); return }
   el.classList.add('ph')
@@ -193,6 +201,60 @@ function fillCover(el, songs, icon, onCover) {
         return
       }
     }
+  }
+  queueMicrotask(() => { if (el._lazy) lazyObs.observe(el) })
+}
+
+// ── Mosaico de portadas (playlists de género / estilo) ────────────────────────
+// 4 portadas de artistas distintos; si no alcanzan, de álbumes distintos
+const mosaicCache = new Map()
+
+function mosaicCandidates(songs) {
+  const out = [], artists = new Set(), albums = new Set()
+  for (const s of songs) {
+    const a = (splitArtists(s.artist)[0] || '').toLowerCase()
+    if (artists.has(a)) continue
+    artists.add(a); albums.add(albumKey(s)); out.push(s)
+    if (out.length >= 12) return out
+  }
+  for (const s of songs) {
+    if (albums.has(albumKey(s))) continue
+    albums.add(albumKey(s)); out.push(s)
+    if (out.length >= 12) break
+  }
+  return out
+}
+
+function fillMosaic(el, key, songs, color) {
+  lazyObs.unobserve(el)
+  el._lazy = null
+  el._mkey = key
+  el.classList.add('mosaic')
+  el.classList.remove('m4', 'ph')
+  el.style.background = rgb(color)
+  const draw = covers => {
+    if (el._mkey !== key) return
+    el.innerHTML = ''
+    el.classList.toggle('m4', covers.length >= 4)
+    if (!covers.length) { el.innerHTML = svg(I.tag); return }
+    for (const c of covers.slice(0, covers.length >= 4 ? 4 : 1)) {
+      const img = new Image()
+      img.alt = ''; img.draggable = false; img.src = c
+      el.appendChild(img)
+    }
+  }
+  const cached = mosaicCache.get(key)
+  if (cached) { draw(cached); return }
+  el.innerHTML = svg(I.tag)
+  el._lazy = async () => {
+    const covers = []
+    for (const s of mosaicCandidates(songs)) {
+      if (!s.metaLoaded) await ensureMeta(s)
+      if (s.cover && !covers.includes(s.cover)) covers.push(s.cover)
+      if (covers.length >= 4) break
+    }
+    if (covers.length >= 4) mosaicCache.set(key, covers)   // con menos se reintenta luego
+    draw(covers)
   }
   queueMicrotask(() => { if (el._lazy) lazyObs.observe(el) })
 }
@@ -274,9 +336,472 @@ function getGroups() {
 
 const groupCtx = g => ({ key: `${g.kind}:${g.key}`, title: g.name })
 
+// ── Géneros y mood (etiquetas de Last.fm) ─────────────────────────────────────
+// Cada canción se clasifica con SUS etiquetas en Last.fm; las del artista sólo se
+// usan si la canción no trae ningún género (así una cumbia de un artista de
+// reggaetón cae en Cumbia y no en Reggaetón).
+const GENRES = [
+  { id: 'salsa',      name: 'Salsa',             color: [200, 50, 40],  tags: ['salsa', 'salsa romantica', 'salsa romántica', 'salsa dura', 'timba', 'son cubano'] },
+  { id: 'cumbia',     name: 'Cumbia',            color: [230, 120, 20], tags: ['cumbia', 'cumbia villera', 'cumbia sonidera', 'tecnocumbia', 'cumbia mexicana', 'cumbia norteña', 'cumbia nortena', 'cumbia andina', 'cumbia colombiana', 'chicha', 'cumbia pop', 'electrocumbia', 'eletrocumbia', 'electro cumbia', 'cumbia electronica', 'cumbia electrónica', 'cumbia rebajada'] },
+  { id: 'corridos',   name: 'Corridos',          color: [120, 80, 40],  tags: ['corridos tumbados', 'corridos', 'corrido', 'corridos belicos', 'corridos bélicos', 'corrido tumbado', 'sierreno', 'sierreño', 'tumbado'] },
+  { id: 'regional',   name: 'Regional mexicano', color: [30, 120, 60],  tags: ['regional mexicano', 'regional mexican', 'musica mexicana', 'música mexicana', 'banda', 'banda sinaloense', 'norteno', 'norteño', 'grupera', 'grupero', 'mariachi', 'ranchera', 'duranguense', 'tejano', 'tex-mex'] },
+  { id: 'reggaeton',  name: 'Reggaetón',         color: [220, 40, 140], tags: ['reggaeton', 'reggaetón', 'regueton', 'perreo', 'dembow', 'urbano latino', 'latin urban', 'neoperreo', 'urbano'] },
+  { id: 'trap-latino',name: 'Trap latino',       color: [90, 40, 160],  tags: ['latin trap', 'trap latino', 'trap en español', 'trap en espanol', 'spanish trap', 'argentine trap', 'trap argentino'] },
+  { id: 'bachata',    name: 'Bachata',           color: [180, 30, 80],  tags: ['bachata'] },
+  { id: 'merengue',   name: 'Merengue',          color: [240, 160, 20], tags: ['merengue'] },
+  { id: 'vallenato',  name: 'Vallenato',         color: [140, 110, 30], tags: ['vallenato'] },
+  { id: 'pop-latino', name: 'Pop latino',        color: [230, 70, 90],  tags: ['latin pop', 'pop latino', 'pop en español', 'pop en espanol', 'spanish pop', 'mexican pop'] },
+  { id: 'rock-es',    name: 'Rock en español',   color: [70, 70, 90],   tags: ['rock en español', 'rock en espanol', 'rock mexicano', 'latin rock', 'rock nacional', 'spanish rock', 'rock argentino', 'rock latino'] },
+  { id: 'indie',      name: 'Indie / Folk',      color: [60, 130, 140], tags: ['indie', 'indie pop', 'indie rock', 'bedroom pop', 'indie folk', 'dream pop', 'indie latino', 'alternative', 'alternativo', 'folk', 'contemporary folk'] },
+  { id: 'balada',     name: 'Baladas',           color: [150, 60, 110], tags: ['balada', 'baladas', 'ballad', 'bolero', 'balada romantica', 'balada romántica', 'romantica'] },
+  { id: 'pop',        name: 'Pop',               color: [40, 110, 220], tags: ['pop', 'dance pop', 'synthpop', 'electropop', 'teen pop', 'pop rock'] },
+  { id: 'rock',       name: 'Rock',              color: [110, 30, 30],  tags: ['rock', 'classic rock', 'hard rock', 'alternative rock', 'punk', 'pop punk', 'grunge', 'punk rock'] },
+  { id: 'metal',      name: 'Metal',             color: [50, 50, 50],   tags: ['metal', 'heavy metal', 'nu metal', 'metalcore', 'thrash metal'] },
+  { id: 'hiphop',     name: 'Hip hop / Rap',     color: [180, 100, 30], tags: ['hip-hop', 'hip hop', 'rap', 'hiphop', 'trap', 'underground hip-hop', 'rap en español'] },
+  { id: 'rnb',        name: 'R&B / Soul',        color: [100, 50, 130], tags: ['rnb', 'r&b', 'soul', 'neo-soul', 'contemporary r&b'] },
+  { id: 'electronica',name: 'Electrónica',       color: [20, 140, 180], tags: ['electronic', 'edm', 'house', 'techno', 'electro', 'dubstep', 'trance', 'deep house', 'electronica'] },
+  { id: 'kpop',       name: 'K-pop',             color: [240, 90, 160], tags: ['k-pop', 'kpop'] },
+  { id: 'jazz',       name: 'Jazz',              color: [160, 120, 60], tags: ['jazz'] },
+  { id: 'clasica',    name: 'Clásica',           color: [120, 100, 80], tags: ['classical', 'clasica', 'clásica'] },
+  // Mood: sólo con etiquetas de la canción (las del artista no dicen nada del mood)
+  // alias: palabras con las que se encuentra en el buscador ("canciones tristes" → Triste)
+  { id: 'm-bailar',   name: 'Para bailar',       color: [230, 50, 100], mood: true, tags: ['dance', 'party', 'perreo', 'bailable', 'fiesta', 'club'],
+    alias: ['bailar', 'bailable', 'bailables', 'fiesta', 'perreo', 'party', 'antro', 'reventon'] },
+  { id: 'm-peda',     name: 'Para la peda',      color: [190, 110, 30], mood: true, tags: ['drinking', 'drinking songs', 'borracho'],
+    alias: ['peda', 'pisto', 'chupe', 'borracho', 'borrachera', 'cantina', 'cheve', 'cerveza', 'tomar', 'drinking', 'pedo'] },
+  { id: 'm-feliz',    name: 'Feliz / Alegre',    color: [235, 180, 30], mood: true, tags: ['happy', 'feel good', 'cheerful', 'fun', 'alegre', 'feliz'],
+    alias: ['feliz', 'felices', 'alegre', 'alegres', 'alegria', 'happy', 'contento', 'buena vibra', 'good vibes'] },
+  { id: 'm-chill',    name: 'Tranqui',           color: [60, 140, 120], mood: true, tags: ['chill', 'chillout', 'relax', 'relaxing', 'mellow', 'lo-fi', 'lofi', 'calm', 'acoustic'],
+    alias: ['tranqui', 'tranquila', 'tranquilas', 'relajada', 'relajante', 'relax', 'chill', 'calma', 'dormir', 'estudiar'] },
+  { id: 'm-triste',   name: 'Triste / Despecho', color: [60, 80, 150],  mood: true, tags: ['sad', 'melancholic', 'melancholy', 'heartbreak', 'despecho', 'triste', 'depressing', 'emotional'],
+    alias: ['triste', 'tristes', 'tristeza', 'despecho', 'llorar', 'sad', 'desamor', 'ardido', 'ardida', 'dolido', 'melancolica', 'corazon roto', 'depre'] },
+  { id: 'm-romance',  name: 'Romántica',         color: [200, 60, 80],  mood: true, tags: ['romantic', 'love', 'love songs', 'romantico', 'romántico', 'amor', 'love song'],
+    alias: ['romantica', 'romanticas', 'romance', 'amor', 'enamorado', 'enamorada', 'love', 'cursi'] },
+  { id: 'm-energia',  name: 'Con energía',       color: [240, 140, 20], mood: true, tags: ['energetic', 'upbeat', 'workout', 'gym', 'hype'],
+    alias: ['energia', 'gym', 'ejercicio', 'motivacion', 'prender', 'animo', 'animada', 'entrenar'] },
+]
+const GENRE_BY_ID = new Map(GENRES.map(g => [g.id, g]))
+const TAG_TO_GENRE = new Map()
+for (const g of GENRES) for (const t of g.tags) if (!TAG_TO_GENRE.has(t) || g.mood) TAG_TO_GENRE.set(t, g.id)
+// 'perreo' es género (Reggaetón) y mood (Para bailar): se cuenta en ambos
+const TAG_EXTRA = new Map([['perreo', 'reggaeton']])
+const LATIN_TAGS = new Set(['mexico', 'mexican', 'latin', 'latino', 'spanish', 'español', 'espanol', 'argentina',
+  'colombia', 'puerto rico', 'chile', 'peru', 'venezuela', 'en español', 'reggaeton', 'corridos tumbados'])
+const LATIN_REMAP = [['rock', 'rock-es'], ['pop', 'pop-latino'], ['hiphop', 'trap-latino']]
+
+// Estilos del modelo de audio (Discogs) → géneros de la app
+const AUDIO_STYLE = {
+  'Latin---Cumbia': 'cumbia', 'Latin---Porro': 'cumbia',
+  'Latin---Salsa': 'salsa', 'Latin---Descarga': 'salsa', 'Latin---Son Montuno': 'salsa', 'Latin---Son': 'salsa',
+  'Latin---Guaracha': 'salsa', 'Latin---Mambo': 'salsa', 'Latin---Boogaloo': 'salsa', 'Latin---Pachanga': 'salsa',
+  'Latin---Charanga': 'salsa', 'Latin---Cubano': 'salsa', 'Latin---Guaguancó': 'salsa', 'Latin---Afro-Cuban': 'salsa',
+  'Latin---Cha-Cha': 'salsa',
+  'Latin---Merengue': 'merengue', 'Latin---Vallenato': 'vallenato', 'Latin---Reggaeton': 'reggaeton',
+  'Latin---Norteño': 'regional', 'Latin---Ranchera': 'regional', 'Latin---Mariachi': 'regional', 'Latin---Tejano': 'regional',
+  'Latin---Bolero': 'balada', 'Pop---Ballad': 'balada', 'Folk, World, & Country---Folk': 'indie',
+}
+function styleToGenre(name) {
+  if (AUDIO_STYLE[name]) return AUDIO_STYLE[name]
+  const [parent, style = ''] = name.split('---')
+  if (/metal|grind|thrash|doom/i.test(style)) return 'metal'
+  if (parent === 'Rock')        return /indie|dream pop|shoegaze|lo-fi/i.test(style) ? 'indie' : 'rock'
+  if (parent === 'Hip Hop')     return 'hiphop'
+  if (parent === 'Electronic')  return /dance-pop|synth-pop/i.test(style) ? 'pop' : style === 'Hip Hop' ? 'hiphop' : 'electronica'
+  if (parent === 'Funk / Soul') return 'rnb'
+  if (parent === 'Jazz')        return 'jazz'
+  if (parent === 'Classical')   return 'clasica'
+  if (parent === 'Pop')         return style === 'Indie Pop' ? 'indie' : style === 'K-pop' ? null : 'pop'
+  return null
+}
+// Ritmos que el audio reconoce con mucha seguridad: mandan sobre el género del artista
+const AUDIO_DISTINCT = new Set(['cumbia', 'salsa', 'merengue', 'vallenato', 'regional', 'reggaeton'])
+const AUDIO_FAMILY   = { regional: ['corridos'], reggaeton: ['trap-latino', 'pop-latino'] }
+const TITLE_HINT = /\b(cumbia|cumbias|salsa|bachata|merengue|vallenato|corrido|corridos)\b/i
+const TITLE_HINT_GENRE = { cumbia: 'cumbia', cumbias: 'cumbia', salsa: 'salsa', bachata: 'bachata', merengue: 'merengue',
+                           vallenato: 'vallenato', corrido: 'corridos', corridos: 'corridos' }
+const AUDIO_CHECKABLE = ['clasica', 'jazz', 'metal', 'electronica', 'salsa', 'cumbia', 'merengue', 'vallenato']
+const DANCE_GENRES   = ['cumbia', 'salsa', 'merengue', 'reggaeton', 'bachata']
+const AUDIO_MOOD = {
+  sad: 'm-triste', melancholic: 'm-triste', romantic: 'm-romance', love: 'm-romance', happy: 'm-feliz', fun: 'm-feliz',
+  calm: 'm-chill', relaxing: 'm-chill', soft: 'm-chill', meditative: 'm-chill',
+  party: 'm-bailar', groovy: 'm-bailar', energetic: 'm-energia', upbeat: 'm-energia', powerful: 'm-energia',
+}
+// El modelo de mood da valores bajos (entrenado con música de stock); estos umbrales
+// dejan ~10% de la biblioteca en cada uno
+const AUDIO_MOOD_MIN = { 'm-chill': 0.08, 'm-energia': 0.2 }
+// [clave de lyrics-mood.js, mood, palabras clave por cada 100 palabras para contar]
+// Umbrales calibrados con la biblioteca (~15% de canciones por mood)
+const LYRIC_MOODS = [
+  ['triste', 'm-triste', 2.5], ['romance', 'm-romance', 1.8], ['feliz', 'm-feliz', 0.8],
+  ['bailar', 'm-bailar', 1.0], ['peda', 'm-peda', 0.8],
+]
+const LYRIC_MOOD_IDS = new Set(LYRIC_MOODS.map(([, id]) => id))
+
+const rgb = ([r, g, b]) => `rgb(${r} ${g} ${b})`
+
+const lfm = { ready: false, tracks: {}, artists: {} }   // caché de Last.fm en memoria
+const audioFeat = new Map()   // path → { styles, moods, vec } del análisis de audio
+let songsByKey  = new Map()   // lfmKey → canciones (para cruzar con "similares")
+let genreCache  = null
+
+function normKey(s) {
+  return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ').trim()
+}
+
+// Quita "(feat. X)", "- Remastered 2011", "(En Vivo)"… para encontrarla en Last.fm
+function cleanTitle(t) {
+  const c = String(t || '')
+    .replace(/\s*[([](?:feat|ft|with|con|prod)\.?\s[^)\]]*[)\]]/gi, '')
+    .replace(/\s*[([][^)\]]*(?:remaster|en vivo|live|official|video|audio|lyric|letra|visualizer|versi[oó]n)[^)\]]*[)\]]/gi, '')
+    .replace(/\s+-\s+[^-]*(?:remaster|en vivo|live|versi[oó]n)[^-]*$/i, '')
+    .trim()
+  return c || String(t || '')
+}
+
+const trackKey = (artist, title) => normKey(artist) + '|' + normKey(cleanTitle(title))
+
+function lookupOf(song) {
+  const artist = splitArtists(song.artist)[0]
+  if (!artist || !song.title) return null
+  const title = cleanTitle(song.title)
+  return { key: trackKey(artist, title), akey: normKey(artist), artist, title }
+}
+
+function applyTags(song) {
+  const q = lookupOf(song)
+  song.lfmKey  = q?.key
+  song.lfmAkey = q?.akey
+  const t = q ? lfm.tracks[q.key] : null
+  const a = q ? lfm.artists[q.akey] : null
+
+  // Vector de etiquetas para comparar canciones (radio)
+  const vec = new Map()
+  const addVec = (tags, w) => { for (const [n, c] of tags || []) vec.set(n, (vec.get(n) || 0) + w * c / 100) }
+  addVec(t, 1)
+  addVec(a, t?.length ? 0.3 : 0.8)
+  song.tagVec = vec
+
+  const score = new Map()
+  const addScore = (tags, w, moods) => {
+    for (const [n, c] of tags || []) {
+      for (const id of [TAG_TO_GENRE.get(n), TAG_EXTRA.get(n)]) {
+        if (!id || !!GENRE_BY_ID.get(id).mood !== moods) continue
+        score.set(id, Math.max(score.get(id) || 0, w * c / 100))
+      }
+    }
+  }
+  addScore(t, 1, false)
+  const trackHasGenre = score.size > 0
+  if (trackHasGenre) {
+    addScore(a, 0.25, false)   // 0.25 nunca llega al umbral: el artista sólo rellena huecos
+  } else {
+    // Las etiquetas de artista traen mucha basura ("All", "mexico"…) y el género real
+    // puede tener poco peso (Espinoza Paz → banda: 5); se escala al mejor género que tenga
+    addScore(a, 1, false)
+    const top = Math.max(0, ...score.values())
+    if (top) for (const [id, v] of score) score.set(id, v / top)
+  }
+
+  // El título a veces lo dice ("Baila Esta Cumbia", "Yo No Sé Mañana (salsa)")
+  const hint = TITLE_HINT.exec(song.title || '')
+  if (hint) {
+    const id = TITLE_HINT_GENRE[hint[1].toLowerCase()]
+    score.set(id, Math.max(score.get(id) || 0, 0.6))
+  }
+
+  // Análisis de audio: distingue una cumbia o una salsa aunque el artista sea de reggaetón
+  const af = audioFeat.get(song.path)
+  if (af) {
+    const au = new Map()
+    for (const [name, v] of af.styles) {
+      const id = styleToGenre(name)
+      if (id) au.set(id, Math.max(au.get(id) || 0, v))
+    }
+    // Si Last.fm / el título ya dicen un ritmo y el audio lo confirma aunque sea poco,
+    // no se agrega otro (el modelo confunde cumbias sonideras con reggaetón)
+    const confirmed = [...score.keys()].some(id => AUDIO_DISTINCT.has(id) && (au.get(id) || 0) >= 0.15)
+    // Last.fm a veces confunde artistas homónimos (Alex Luna → un cantante de ópera):
+    // si el género del artista se oye claramente y el audio no lo detecta, pierde peso
+    if (!trackHasGenre)
+      for (const id of AUDIO_CHECKABLE)
+        if (score.has(id) && (au.get(id) || 0) < 0.05) score.set(id, score.get(id) * 0.2)
+    const strong = [...au].filter(([id, v]) => AUDIO_DISTINCT.has(id) && v >= 0.45).map(([id]) => id)
+    if (!trackHasGenre && !confirmed && strong.length) {
+      const keep = new Set(strong.flatMap(id => [id, ...(AUDIO_FAMILY[id] || [])]))
+      for (const [id, v] of score) if (!keep.has(id)) score.set(id, v * 0.2)
+    }
+    const hasLfm = score.size > 0
+    for (const [id, v] of au) {
+      if (v < 0.3) continue
+      const ok = AUDIO_DISTINCT.has(id) ? !confirmed || score.has(id) || v >= 0.7 : !hasLfm
+      if (ok) score.set(id, Math.max(score.get(id) || 0, v))
+    }
+  }
+
+  // Artista latino: "rock" / "pop" / "rap" se refieren a su versión en español
+  if ([...(a || []), ...(t || [])].some(([n]) => LATIN_TAGS.has(n)) ||
+      af?.styles.some(([n, v]) => n.startsWith('Latin---') && v >= 0.15)) {
+    for (const [from, to] of LATIN_REMAP) {
+      if (!score.has(from)) continue
+      score.set(to, Math.max(score.get(to) || 0, score.get(from)))
+      score.delete(from)
+    }
+  }
+  addScore(t, 1, true)
+  // Ánimo por letra: lo más fiable para música en español (un corrido triste suena "alegre")
+  const ly = af?.lyr
+  if (ly) {
+    for (const [key, id, min] of LYRIC_MOODS) {
+      const v = ly[key] || 0
+      if (v >= min) score.set(id, Math.max(score.get(id) || 0, Math.min(1, 0.4 + 0.15 * v / min)))
+    }
+  }
+  // El ánimo por audio es débil; sólo rellena lo que la letra no puede decir
+  // (tranquila / con energía) o canciones sin letra
+  if (af) {
+    for (const [name, v] of af.moods) {
+      const id = AUDIO_MOOD[name]
+      if (!id || v < (AUDIO_MOOD_MIN[id] || 0.25) || score.has(id) || (ly && LYRIC_MOOD_IDS.has(id))) continue
+      score.set(id, v)
+    }
+  }
+  const dance = Math.max(0, ...DANCE_GENRES.map(id => score.get(id) || 0))
+  if (dance >= 0.45) score.set('m-bailar', Math.max(score.get('m-bailar') || 0, 0.3))
+  song.genreScore = score
+  song.genres = [...score].filter(([id, v]) => v >= (GENRE_BY_ID.get(id).mood ? 0.2 : 0.25))
+    .sort((x, y) => y[1] - x[1]).map(([id]) => id)
+  song.tagText = song.genres.map(id => GENRE_BY_ID.get(id).name).join(' ') + ' ' + (t || []).map(([n]) => n).join(' ')
+}
+
+function reindexTags() {
+  songsByKey = new Map()
+  for (const s of allSongs) {
+    applyTags(s)
+    if (!s.lfmKey) continue
+    if (!songsByKey.has(s.lfmKey)) songsByKey.set(s.lfmKey, [])
+    songsByKey.get(s.lfmKey).push(s)
+  }
+  genreCache = null
+}
+
+function getGenreGroups() {
+  if (genreCache) return genreCache
+  const map = new Map(GENRES.map(g => [g.id, { ...g, kind: 'genre', key: g.id, songs: [] }]))
+  for (const s of allSongs) for (const id of s.genres || []) map.get(id).songs.push(s)
+  for (const g of map.values()) g.songs.sort((a, b) => b.genreScore.get(g.id) - a.genreScore.get(g.id))
+  const list = [...map.values()].filter(g => g.songs.length).sort((a, b) => b.songs.length - a.songs.length)
+  genreCache = { map, genres: list.filter(g => !g.mood), moods: list.filter(g => g.mood) }
+  return genreCache
+}
+
+// Redibujar toda la biblioteca (miles de filas) tarda más de un segundo: si siguen
+// siendo los mismos géneros sólo se actualiza el número de canciones de cada uno
+let sidebarGenreIds = ''
+function refreshSidebarGenres() {
+  const gg = getGenreGroups()
+  const list = [...gg.genres, ...gg.moods]
+  const ids = list.map(x => x.key).sort().join(',')
+  if (ids !== sidebarGenreIds) { renderSidebar(); return }
+  for (const x of list) {
+    const sub = document.querySelector(`#lib-list li[data-key="genre:${x.key}"] .lib-sub`)
+    if (sub) sub.textContent = `${x.mood ? 'Mood' : 'Género'} • ${nSongs(x.songs.length)}`
+  }
+}
+
+function genresChanged() {
+  genreCache = null
+  if (libFilter === 'all' || libFilter === 'genre') refreshSidebarGenres()
+  const kind = viewKind(view)
+  if (kind === 'home') fillGenreShelves()
+  else if (view.name === 'genre') openCollection(true)
+  if (currentSong) renderNpGenres()
+}
+
+// Tareas en segundo plano que comparten la línea de estado de la biblioteca
+const bgStatus = { lfm: '', audio: '', radio: '' }
+function setBg(key, text) {
+  bgStatus[key] = text
+  const t = Object.values(bgStatus).filter(Boolean).join(' · ')
+  setStatus(t || `${allSongs.length} canciones`)
+}
+
+// ── Análisis de audio (proceso aparte) ────────────────────────────────────────
+function decodeVec(b64) {
+  const bin = atob(b64)
+  const v = new Float32Array(bin.length)
+  for (let i = 0; i < bin.length; i++) { const x = bin.charCodeAt(i); v[i] = (x > 127 ? x - 256 : x) / 127 }
+  return v
+}
+
+function setAudioFeat(path, d) {
+  if (!d || d.error) audioFeat.delete(path)
+  else audioFeat.set(path, { styles: d.styles, moods: d.moods, vec: decodeVec(d.emb), lyr: d.lyr })
+}
+
+let audioDirty = 0
+async function analyzeAudio(files) {
+  const cached = await api.audioCached()
+  for (const [p, d] of Object.entries(cached)) setAudioFeat(p, d)
+  reindexTags()
+  genresChanged()
+  const n = await api.audioAnalyze(files)
+  if (n) setBg('audio', `Analizando audio… faltan ${n}`)
+}
+
+api.onAudioResult(({ path, data }) => {
+  setAudioFeat(path, data)
+  const s = songByPath.get(path)
+  if (s) applyTags(s)
+  if (++audioDirty >= 40) { audioDirty = 0; genresChanged() }
+})
+api.onAudioProgress(m => {
+  if (m.type === 'fatal') { console.error('Análisis de audio:', m.error); setBg('audio', 'Análisis de audio no disponible'); return }
+  if (m.lyrics) { setBg('audio', `Leyendo letras… faltan ${m.lyrics}`); return }
+  if (m.left) { setBg('audio', `Analizando audio… faltan ${m.left}`); return }
+  setBg('audio', '')
+  audioDirty = 0
+  genresChanged()
+})
+
+// Clasifica en segundo plano las canciones que aún no tienen etiquetas
+let tagRun = 0
+async function tagLibrary() {
+  const run = ++tagRun
+  const [st, cached] = await Promise.all([api.lastfmStatus(), api.lastfmCached()])
+  if (run !== tagRun) return
+  lfm.ready   = st.hasKey
+  lfm.tracks  = cached.tracks
+  lfm.artists = cached.artists
+  reindexTags()
+  genresChanged()
+  if (!lfm.ready) return
+
+  const seen = new Set()
+  const todo = allSongs.filter(s => s.lfmKey && !(s.lfmKey in lfm.tracks) && !seen.has(s.lfmKey) && seen.add(s.lfmKey))
+  for (let i = 0; i < todo.length; i++) {
+    if (run !== tagRun) return
+    const q = lookupOf(todo[i])
+    if (!q || q.key in lfm.tracks) continue
+    setBg('lfm', `Géneros (Last.fm) ${i + 1}/${todo.length}`)
+    try {
+      const r = await api.lastfmTags(q)
+      if (!r) { setBg('lfm', ''); return }
+      lfm.tracks[q.key]   = r.track
+      lfm.artists[q.akey] = r.artist
+    } catch (e) {
+      setBg('lfm', String(e.message).includes('invalid-key')
+        ? 'La API key de Last.fm no es válida'
+        : 'Sin conexión con Last.fm')
+      return
+    }
+    for (const s of songsByKey.get(q.key) || []) applyTags(s)
+    if (i % 60 === 59) genresChanged()
+  }
+  if (todo.length) genresChanged()
+  setBg('lfm', '')
+}
+
+// ── Radio (aleatorio inteligente) ─────────────────────────────────────────────
+function cosine(a, b) {
+  let dot = 0, na = 0, nb = 0
+  for (const [k, v] of a) { na += v * v; const w = b.get(k); if (w) dot += v * w }
+  for (const v of b.values()) nb += v * v
+  return na && nb ? dot / Math.sqrt(na * nb) : 0
+}
+
+async function startRadio(seed, { quiet = false } = {}) {
+  if (!seed) return
+  setBg('radio', 'Armando radio…')
+  const q = lookupOf(seed)
+  let sim = null
+  if (lfm.ready && q) {
+    try {
+      if (!(q.key in lfm.tracks)) {
+        const r = await api.lastfmTags(q)
+        if (r) { lfm.tracks[q.key] = r.track; lfm.artists[q.akey] = r.artist; applyTags(seed) }
+      }
+      sim = await api.lastfmSimilar(q)
+    } catch {}
+  }
+
+  const score = new Map()
+  const add = (s, v) => { if (s !== seed) score.set(s, (score.get(s) || 0) + v) }
+
+  // 1) Lo que Last.fm dice que escucha la gente junto con esta canción
+  if (sim) {
+    for (const [a, t, m] of sim.tracks)
+      for (const s of songsByKey.get(trackKey(a, t)) || []) add(s, 1 + m)
+    const simArtists = new Map(sim.artists.map(([a, m]) => [normKey(a), m]))
+    for (const s of allSongs) { const m = simArtists.get(s.lfmAkey); if (m) add(s, 0.4 * m) }
+  }
+  // 2) Canciones con etiquetas parecidas (mismo género / mood)
+  if (seed.tagVec?.size) {
+    for (const s of allSongs) {
+      if (!s.tagVec?.size) continue
+      const c = cosine(seed.tagVec, s.tagVec)
+      if (c > 0.3) add(s, 0.8 * c)
+    }
+  }
+  // 3) Canciones que SUENAN parecido (huella del análisis de audio). Se resta la
+  // media de la biblioteca para que cuente lo que distingue a cada canción.
+  const seedVec = audioFeat.get(seed.path)?.vec
+  if (seedVec) {
+    const vecs = allSongs.map(s => audioFeat.get(s.path)?.vec)
+    const mean = new Float32Array(seedVec.length)
+    let n = 0
+    for (const v of vecs) if (v) { n++; for (let i = 0; i < v.length; i++) mean[i] += v[i] }
+    for (let i = 0; i < mean.length; i++) mean[i] /= n
+    const center = v => {
+      const c = new Float32Array(v.length)
+      let norm = 0
+      for (let i = 0; i < v.length; i++) { c[i] = v[i] - mean[i]; norm += c[i] * c[i] }
+      norm = Math.sqrt(norm) || 1
+      for (let i = 0; i < v.length; i++) c[i] /= norm
+      return c
+    }
+    const cs = center(seedVec)
+    allSongs.forEach((s, k) => {
+      if (!vecs[k] || s === seed) return
+      const cv = center(vecs[k])
+      let c = 0
+      for (let i = 0; i < cs.length; i++) c += cs[i] * cv[i]
+      if (c > 0.3) add(s, 3 * (c - 0.3))
+    })
+  }
+  // 4) Un poco del mismo artista
+  for (const s of allSongs) if (s.lfmAkey && s.lfmAkey === seed.lfmAkey) add(s, 0.3)
+
+  let picks = [...score].sort((a, b) => b[1] - a[1]).slice(0, 80)
+  if (picks.length < 10) {
+    const ak = albumKey(seed)
+    for (const s of allSongs) if (albumKey(s) === ak || s.artist === seed.artist) add(s, 0.1)
+    picks = [...score].sort((a, b) => b[1] - a[1]).slice(0, 80)
+  }
+  // Barajado ponderado: lo más parecido tiende a salir antes, pero cada radio es distinta
+  const list = picks.map(([s, v]) => [s, Math.pow(Math.random(), 1 / v)])
+    .sort((a, b) => b[1] - a[1]).slice(0, 50).map(([s]) => s)
+
+  setBg('radio', '')
+  const ctx = { key: 'radio:' + seed.path, title: `Radio de ${seed.title}` }
+  if (seed === currentSong) {
+    // Sigue sonando la misma canción; sólo cambia lo que viene después
+    playContext = ctx
+    filtered = [seed, ...list]
+    currentIdx = 0
+    if (shuffle) buildShuffleQueue()
+    markSidebar()
+    renderRight()
+    updatePlayButtons()
+  } else {
+    playList([seed, ...list], 0, ctx)
+  }
+  if (!quiet && rightMode !== 'queue') setRight('queue')
+}
+
 // ── Navegación ────────────────────────────────────────────────────────────────
 function viewKey(v) { return `${v.name}:${v.key ?? v.q ?? ''}` }
-function viewKind(v) { return v.name === 'home' || v.name === 'lyrics' ? v.name : 'collection' }
+function viewKind(v) { return v.name === 'home' || v.name === 'lyrics' || v.name === 'search' ? v.name : 'collection' }
 
 function navigate(v) {
   if (viewKey(v) === viewKey(view)) return
@@ -302,12 +827,12 @@ function goForward() {
 
 function renderView() {
   const kind = viewKind(view)
-  for (const k of ['home', 'collection', 'lyrics']) $('view-' + k).hidden = k !== kind
+  for (const k of ['home', 'search', 'collection', 'lyrics']) $('view-' + k).hidden = k !== kind
   $('btn-home').classList.toggle('active', kind === 'home')
   $('btn-lyrics').classList.toggle('active', kind === 'lyrics')
   $('btn-back').disabled = !histBack.length
   $('btn-fwd').disabled  = !histFwd.length
-  if (view.name === 'search') {
+  if (view.q != null) {
     $('search').value = view.q
     $('search-clear').hidden = false
   } else if (kind !== 'lyrics') {
@@ -316,6 +841,7 @@ function renderView() {
   }
 
   if (kind === 'home') buildHome()
+  else if (kind === 'search') buildSearch()
   else if (kind === 'collection') openCollection()
   else { curLyric = -1; syncLyrics(audio.currentTime, true) }
   markSidebar()
@@ -327,6 +853,7 @@ function renderSidebar() {
     c.classList.toggle('active', c.dataset.filter === libFilter))
 
   const ul = $('lib-list')
+  const keepTop = ul.scrollTop
   ul.innerHTML = ''
   const frag = document.createDocumentFragment()
 
@@ -355,15 +882,34 @@ function renderSidebar() {
       th => { th.classList.add('tile-songs'); th.innerHTML = svg(I.note) })
   }
 
+  sidebarGenreIds = ''
+  if (libFilter === 'all' || libFilter === 'genre') {
+    const gg = getGenreGroups()
+    sidebarGenreIds = [...gg.genres, ...gg.moods].map(x => x.key).sort().join(',')
+    for (const x of [...gg.genres, ...gg.moods])
+      add(`genre:${x.key}`, { name: 'genre', key: x.key }, x.name, `${x.mood ? 'Mood' : 'Género'} • ${nSongs(x.songs.length)}`,
+        th => fillMosaic(th, `genre:${x.key}`, x.songs, x.color))
+    if (libFilter === 'genre' && !gg.genres.length) {
+      const li = document.createElement('li')
+      li.className = 'lib-cta'
+      li.innerHTML = lfm.ready
+        ? '<div class="lib-sub">Clasificando tu música… los géneros irán apareciendo aquí.</div>'
+        : '<div class="lib-name">Ordena tu música por género</div><div class="lib-sub">Conecta Last.fm para empezar →</div>'
+      if (!lfm.ready) li.addEventListener('click', openSettings)
+      frag.appendChild(li)
+    }
+  }
+
   const g = getGroups()
-  if (libFilter !== 'album')
+  if (libFilter === 'all' || libFilter === 'artist')
     g.artistList.forEach(a => add(`artist:${a.key}`, { name: 'artist', key: a.key }, a.name, 'Artista',
       th => fillCover(th, a.songs, I.person), true))
-  if (libFilter !== 'artist')
+  if (libFilter === 'all' || libFilter === 'album')
     g.albumList.forEach(a => add(`album:${a.key}`, { name: 'album', key: a.key }, a.name, `Álbum • ${a.artist || 'Varios artistas'}`,
       th => fillCover(th, a.songs, I.disc)))
 
   ul.appendChild(frag)
+  ul.scrollTop = keepTop
   markSidebar()
 }
 
@@ -461,8 +1007,247 @@ function buildHome() {
   const bySize = (a, b) => b.songs.length - a.songs.length
   const recentAlbums = [...new Set(recents.map(albumKey))].map(k => g.albums.get(k)).filter(Boolean)
   fillShelf('home-recent-albums', recentAlbums.slice(0, 12))
+  fillGenreShelves()
   fillShelf('home-artists', g.artistList.filter(a => a.name !== 'Artista desconocido').sort(bySize).slice(0, 12))
   fillShelf('home-albums', [...g.albumList].sort(bySize).slice(0, 12))
+}
+
+function makeGenreCard(g) {
+  const card = document.createElement('div')
+  card.className = 'card'
+  card.innerHTML =
+    `<div class="card-img-wrap"><div class="card-img genre-img" style="background:${rgb(g.color)}">` +
+    `<span class="genre-name">${esc(g.name)}</span><div class="genre-art"></div></div></div>` +
+    `<div class="card-title">${esc(g.name)}</div><div class="card-sub">${nSongs(g.songs.length)}</div>`
+  fillCover(card.querySelector('.genre-art'), g.songs, I.tag)
+  const btn = playButton('card-play')
+  btn.addEventListener('click', e => { e.stopPropagation(); playList(g.songs, null, groupCtx(g)) })
+  card.querySelector('.card-img-wrap').appendChild(btn)
+  card.addEventListener('click', () => navigate({ name: g.kind === 'tag' ? 'tag' : 'genre', key: g.key }))
+  return card
+}
+
+function fillGenreShelves() {
+  const gg = getGenreGroups()
+  for (const [id, list] of [['home-genres', gg.genres], ['home-moods', gg.moods]]) {
+    const row = $(id)
+    row.innerHTML = ''
+    row.closest('.shelf').hidden = !list.length && (lfm.ready || id === 'home-moods')
+    const frag = document.createDocumentFragment()
+    list.slice(0, 16).forEach(g => frag.appendChild(makeGenreCard(g)))
+    if (!list.length && !lfm.ready && id === 'home-genres') {
+      const card = document.createElement('div')
+      card.className = 'card'
+      card.innerHTML =
+        `<div class="card-img-wrap"><div class="card-img genre-img genre-cta"><span class="genre-name">Ordena tu música por género</span></div></div>` +
+        `<div class="card-title">Conectar Last.fm</div><div class="card-sub">Géneros, mood y radio</div>`
+      card.addEventListener('click', openSettings)
+      frag.appendChild(card)
+    }
+    row.appendChild(frag)
+  }
+}
+
+// ── Búsqueda ──────────────────────────────────────────────────────────────────
+function searchMatches(q) {
+  const f = fold(q)
+  // Etiquetas de estilo (Last.fm) y géneros detectados: "electrocumbia" → Raymix.
+  // Con menos de 3 letras casi cualquier etiqueta coincide, así que no se usan.
+  const useTags = f.length >= 3
+  const tagHit = tags => useTags && (tags || []).some(([n, c]) => c >= 20 && fold(n).includes(f))
+  // Palabras con las que la gente pide un mood: "triste", "canciones tristes", "para la peda"…
+  const words = f.split(/\s+/)
+  const aliasHit = x => useTags && (x.alias || []).some(a => {
+    const fa = fold(a)
+    return fa === f || fa.startsWith(f) || (fa.length >= 4 && (words.includes(fa) || f.includes(fa + ' ') || f.endsWith(' ' + fa)))
+  })
+  const genreHit = s => useTags && (s.genres || []).some(id => {
+    const g = GENRE_BY_ID.get(id)
+    return fold(g.name).includes(f) || aliasHit(g)
+  })
+  const songTagHit = s => tagHit(lfm.tracks[s.lfmKey]) || tagHit(lfm.artists[s.lfmAkey]) || genreHit(s)
+
+  const rank = s => {
+    const t = fold(s.title)
+    return t === f ? 0 : t.startsWith(f) ? 1 : t.includes(f) ? 2
+         : fold(s.artist).includes(f) ? 3 : fold(s.album).includes(f) ? 4 : songTagHit(s) ? 5 : -1
+  }
+  const songs = allSongs.map(s => [s, rank(s)]).filter(([, r]) => r >= 0)
+    .sort((a, b) => a[1] - b[1]).map(([s]) => s)
+
+  const g = getGroups(), gg = getGenreGroups()
+  const byName = list => list.filter(x => fold(x.name).includes(f))
+    .sort((a, b) => fold(b.name).startsWith(f) - fold(a.name).startsWith(f) || b.songs.length - a.songs.length)
+  const named = byName(g.artistList.filter(a => a.name !== 'Artista desconocido'))
+  const tagged = g.artistList.filter(a => !named.includes(a) && tagHit(lfm.artists[normKey(a.name)]))
+    .sort((a, b) => b.songs.length - a.songs.length)
+  const direct = x => fold(x.name).includes(f) || aliasHit(x)
+  const genres = [...gg.genres, ...gg.moods]
+    .filter(x => direct(x) || (useTags && x.tags.some(t => fold(t).includes(f))))
+    .sort((a, b) => direct(b) - direct(a) || b.songs.length - a.songs.length)
+  const moodAlias = genres.find(aliasHit)
+  // Playlist del estilo buscado: canciones cuya etiqueta coincide (sin contar el nombre)
+  const tagSongs = allSongs.filter(s => tagHit(lfm.tracks[s.lfmKey]) || tagHit(lfm.artists[s.lfmAkey]))
+  const exactTag = genres.find(x => x.tags.some(t => fold(t) === f))
+  const style = tagSongs.length && !moodAlias && !genres.some(x => fold(x.name) === f) && {
+    kind: 'tag', key: f, songs: tagSongs, tags: [],
+    name: q.trim().replace(/^./, c => c.toUpperCase()),
+    color: exactTag?.color || [90, 90, 90],
+  }
+  return {
+    songs, style, moodAlias,
+    genres: style ? [style, ...genres] : genres,
+    nameSongs: songs.filter(s => rank(s) < 5).length,
+    artists: [...named, ...tagged],
+    namedArtists: named.length,
+    albums:  byName(g.albumList),
+  }
+}
+
+// El mejor resultado: lo que se llame así; si nada coincide por nombre, el artista
+// cuyo estilo coincide (buscar "electrocumbia" pone a Raymix arriba)
+function bestMatch(q, m) {
+  const f = fold(q)
+  const exact = list => list.find(x => fold(x.name) === f)
+  const starts = list => list.find(x => fold(x.name).startsWith(f))
+  const song = m.nameSongs ? { kind: 'song', song: m.songs[0] } : null
+  // "electrocumbia" / "corridos tumbados" → playlist de ese estilo
+  return exact(m.genres) || exact(m.artists.slice(0, m.namedArtists)) || m.moodAlias || m.style ||
+         (song && fold(song.song.title).startsWith(f) && song) ||
+         m.genres.find(x => fold(x.name).includes(f)) || starts(m.artists.slice(0, m.namedArtists)) ||
+         song || m.albums[0] || m.artists[0] || m.genres[0] ||
+         (m.songs[0] && { kind: 'song', song: m.songs[0] }) || null
+}
+
+const searchCtx = () => ({ key: viewKey(view), title: `Búsqueda "${view.q}"` })
+
+function playSongAlone(s) {
+  if (s === currentSong) { togglePlay(); return }
+  playList([s], 0, searchCtx())
+}
+
+function makeBestCard(b) {
+  const el = document.createElement('div')
+  el.className = 'best-card'
+  const img = document.createElement('div')
+  img.className = 'best-img'
+  let title, sub, play, open
+  if (b.kind === 'song') {
+    const s = b.song
+    fillCover(img, [s], I.note)
+    title = s.title
+    sub = `<span class="best-pill">Canción</span> ${artistLinks(s.artist)}`
+    play = () => playSongAlone(s)
+    open = () => navigate({ name: 'album', key: albumKey(s) })
+  } else if (b.kind === 'genre' || b.kind === 'tag') {
+    fillMosaic(img, `${b.kind}:${b.key}`, b.songs, b.color)
+    title = b.name
+    sub = `<span class="best-pill">${b.kind === 'tag' ? 'Estilo' : b.mood ? 'Mood' : 'Género'}</span> ${nSongs(b.songs.length)}`
+    play = () => playList(b.songs, null, groupCtx(b))
+    open = () => navigate({ name: b.kind, key: b.key })
+  } else {
+    if (b.kind === 'artist') img.classList.add('round')
+    fillCover(img, b.songs, b.kind === 'artist' ? I.person : I.disc)
+    title = b.name
+    sub = `<span class="best-pill">${b.kind === 'artist' ? 'Artista' : 'Álbum'}</span> ${nSongs(b.songs.length)}`
+    play = () => playList(b.songs, null, groupCtx(b))
+    open = () => navigate({ name: b.kind, key: b.key })
+  }
+  const t = document.createElement('div')
+  t.className = 'best-title'
+  t.textContent = title
+  const st = document.createElement('div')
+  st.className = 'best-sub'
+  st.innerHTML = sub
+  const btn = playButton('card-play')
+  btn.addEventListener('click', e => { e.stopPropagation(); play() })
+  el.append(img, t, st, btn)
+  el.addEventListener('click', open)
+  return el
+}
+
+function searchRow(s) {
+  const li = document.createElement('li')
+  li.className = 'srow' + (s === currentSong ? ' playing' : '')
+  li.dataset.path = s.path
+  const th = document.createElement('div')
+  th.className = 'srow-thumb'
+  fillCover(th, [s], I.note)
+  const ov = document.createElement('span')
+  ov.className = 'srow-play'
+  ov.innerHTML = svg(I.play, 16)
+  th.appendChild(ov)
+  const tx = document.createElement('div')
+  tx.className = 'mini-text'
+  tx.innerHTML = `<div class="mini-title">${esc(s.title)}</div><div class="mini-sub">${artistLinks(s.artist)}</div>`
+  const end = document.createElement('div')
+  end.className = 'srow-end'
+  const liked = likedPaths.has(s.path)
+  end.innerHTML = `<button class="like-btn srow-like${liked ? ' on' : ''}" title="Me gusta">${svg(liked ? I.heartFill : I.heart)}</button>` +
+                  `<span>${s.duration ? fmtTime(s.duration) : ''}</span>`
+  li.append(th, tx, end)
+  li._song = s
+  return li
+}
+
+let searchSongs = []
+function buildSearch() {
+  const q = view.q
+  const m = searchMatches(q)
+  searchSongs = m.songs
+  const best = bestMatch(q, m)
+  const none = !best && !m.songs.length
+
+  $('search-top').hidden = none
+  const bestBox = $('search-best')
+  bestBox.innerHTML = ''
+  bestBox.closest('section').hidden = !best
+  if (best) bestBox.appendChild(makeBestCard(best))
+
+  $('search-songs-wrap').hidden = !m.songs.length
+  $('search-all').hidden = m.songs.length <= 5
+  $('search-all').textContent = `Mostrar todas (${m.songs.length})`
+  const ul = $('search-songs')
+  ul.innerHTML = ''
+  m.songs.slice(0, 5).forEach(s => ul.appendChild(searchRow(s)))
+
+  fillShelf('search-artists', m.artists.slice(0, 12))
+  fillShelf('search-albums', m.albums.slice(0, 12))
+  const gRow = $('search-genres')
+  gRow.innerHTML = ''
+  gRow.closest('.shelf').hidden = !m.genres.length
+  m.genres.slice(0, 12).forEach(g => gRow.appendChild(makeGenreCard(g)))
+
+  $('search-empty').textContent = none ? `No se encontraron resultados para "${q}".` : ''
+  $('search-scroll').scrollTop = 0
+}
+
+function markSearchRows() {
+  document.querySelectorAll('#search-songs .srow').forEach(li =>
+    li.classList.toggle('playing', li._song === currentSong))
+}
+
+$('search-songs').addEventListener('click', e => {
+  const li = e.target.closest('.srow')
+  if (!li || e.target.closest('.link')) return
+  if (e.target.closest('.srow-like')) { toggleLike(li._song); buildSearchRowsLikes(); return }
+  playSongAlone(li._song)
+})
+$('search-songs').addEventListener('contextmenu', e => {
+  const li = e.target.closest('.srow')
+  if (!li) return
+  e.preventDefault()
+  openSongMenu(li._song, e.clientX, e.clientY)
+})
+$('search-all').addEventListener('click', () => navigate({ name: 'searchall', q: view.q }))
+
+function buildSearchRowsLikes() {
+  document.querySelectorAll('#search-songs .srow').forEach(li => {
+    const on = likedPaths.has(li._song.path)
+    const b = li.querySelector('.srow-like')
+    b.classList.toggle('on', on)
+    b.innerHTML = svg(on ? I.heartFill : I.heart)
+  })
 }
 
 // ── Colección (lista de canciones con cabecera) ───────────────────────────────
@@ -482,12 +1267,18 @@ function collectionFor(v) {
       const a = g.albums.get(v.key)
       return a && { type: 'Álbum', title: a.name, sub: a.artist, songs: a.songs, icon: I.disc }
     }
-    case 'search': {
-      const q = v.q.toLowerCase()
-      const songs = allSongs.filter(s => `${s.title}\n${s.artist}\n${s.album}`.toLowerCase().includes(q))
-      return { type: 'Resultados de búsqueda', title: v.q, songs, icon: I.search, color: [60, 60, 60],
-               empty: `No se encontraron resultados para "${v.q}".` }
+    case 'genre': {
+      const x = getGenreGroups().map.get(v.key)
+      return x && { type: x.mood ? 'Mood' : 'Género', title: x.name, songs: x.songs, mosaic: `genre:${x.key}`,
+                    color: x.color, empty: 'Todavía no hay canciones clasificadas aquí.' }
     }
+    case 'tag': {
+      const st = searchMatches(v.key).style
+      return st && { type: 'Estilo', title: st.name, songs: st.songs, mosaic: `tag:${st.key}`, color: st.color }
+    }
+    case 'searchall':
+      return { type: 'Canciones que coinciden con', title: v.q, songs: searchMatches(v.q).songs, icon: I.search, color: [60, 60, 60],
+               empty: `No se encontraron canciones para "${v.q}".` }
   }
 }
 
@@ -516,7 +1307,11 @@ function openCollection(keepScroll = false) {
 
   const cv = $('col-cover')
   cv.className = 'col-cover' + (c.round ? ' round' : '')
-  if (c.tile) {
+  cv.style.background = c.bg || ''
+  if (c.mosaic) {
+    fillMosaic(cv, c.mosaic, c.songs, c.color)
+    setHeroColor(tone(c.color, 0.32))
+  } else if (c.tile) {
     lazyObs.unobserve(cv)
     cv.classList.add(c.tile)
     cv.innerHTML = svg(c.icon)
@@ -680,7 +1475,8 @@ function renderQueue() {
   const up = upcoming(50)
   $('queue-next-label').textContent = up.length
     ? `A continuación${playContext ? ' de: ' + playContext.title : ''}`
-    : 'No hay más canciones en la cola'
+    : !currentSong ? 'La cola está vacía'
+    : repeatMode === 1 ? 'Se repetirá la lista' : 'Después sonarán canciones parecidas'
   const frag = document.createDocumentFragment()
   up.forEach(i => frag.appendChild(miniRow(filtered[i], i)))
   list.appendChild(frag)
@@ -737,6 +1533,7 @@ function updateLikeButtons() {
     b.innerHTML = svg(on ? I.heartFill : I.heart, 18)
     b.title = on ? 'Quitar de Tus me gusta' : 'Guardar en Tus me gusta'
   }
+  $('np-radio').hidden = !currentSong
 }
 
 // ── Reproducción ──────────────────────────────────────────────────────────────
@@ -755,7 +1552,10 @@ function playFromView(i) {
   if (!s) return
   const ctx = { key: viewKey(view), title: viewTitle }
   if (s === currentSong && playContext?.key === ctx.key) { togglePlay(); return }
-  playList(viewSongs, i, ctx)
+  // Desde la búsqueda sólo suena la canción elegida (los demás resultados no tienen
+  // por qué parecerse); al terminar sigue la reproducción automática
+  if (view.name === 'searchall') playList([s], 0, ctx)
+  else playList(viewSongs, i, ctx)
 }
 
 function playCurrentView() {
@@ -797,9 +1597,12 @@ function loadAndPlay(idx) {
     }).catch(() => {})
   }
 
-  renderList()
+  scheduleRender()   // sólo si la lista está a la vista (forzar el layout aquí costaba ~250 ms)
+  if (view.name === 'search') markSearchRows()
   markSidebar()
   renderRight()
+  // Última canción de la lista: se piden ya las similares para que el "siguiente" sea inmediato
+  if (!upcoming(1).length && repeatMode !== 1) prefetchRadio(song)
 
   if (audioCtx.state === 'suspended') audioCtx.resume()
   audio.src = toFileUrl(song.path)
@@ -820,6 +1623,14 @@ function updateNowPlaying(song) {
   document.title = song.artist ? `${song.title} • ${song.artist}` : song.title
   updateLikeButtons()
   updateMediaSession()
+  renderNpGenres()
+}
+
+// Chips con los géneros de la canción actual (clic → abre el género)
+function renderNpGenres() {
+  const box = $('np-genres')
+  box.innerHTML = (currentSong?.genres || [])
+    .map(id => `<button class="g-chip" data-genre="${id}">${esc(GENRE_BY_ID.get(id).name)}</button>`).join('')
 }
 
 function setCover(src) {
@@ -871,6 +1682,7 @@ function nextSong() {
     if (!shuffleQueue.length) buildShuffleQueue()
     const next = shufflePos + 1
     if (next >= shuffleQueue.length) {
+      if (repeatMode !== 1) { autoplay(); return }
       buildShuffleQueue()
       if (shuffleQueue.length) { shufflePos = 0; loadAndPlay(shuffleQueue[0]) }
     } else {
@@ -881,6 +1693,27 @@ function nextSong() {
     const next = currentIdx + 1
     if (next < filtered.length) loadAndPlay(next)
     else if (repeatMode === 1) loadAndPlay(0)
+    else autoplay()
+  }
+}
+
+function prefetchRadio(song) {
+  const q = lookupOf(song)
+  if (!lfm.ready || !q) return
+  api.lastfmSimilar(q).catch(() => {})
+}
+
+// Se acabó la lista (p. ej. un resultado de búsqueda) y no hay repetición:
+// sigue con canciones parecidas a la última, como la reproducción automática de Spotify
+let autoplaying = false
+async function autoplay() {
+  if (autoplaying || !currentSong) return
+  autoplaying = true
+  try {
+    await startRadio(currentSong, { quiet: true })
+    if (filtered.length > 1) nextSong()
+  } finally {
+    autoplaying = false
   }
 }
 
@@ -1276,12 +2109,15 @@ async function scanLibrary() {
     refreshLibraryViews()
   }
   setStatus(`${allSongs.length} canciones`)
+  analyzeAudio(files)
+  tagLibrary()
 }
 
 function refreshLibraryViews() {
   renderSidebar()
   const kind = viewKind(view)
   if (kind === 'home') buildHome()
+  else if (kind === 'search') buildSearch()
   else if (kind === 'collection') openCollection(true)
 }
 
@@ -1334,13 +2170,105 @@ document.querySelectorAll('.sb-chips .chip').forEach(chip => {
   })
 })
 
-// Links a artista / álbum en cualquier parte de la UI
+// Links a artista / álbum / género en cualquier parte de la UI
 document.addEventListener('click', e => {
   const a = e.target.closest('[data-artist]')
   if (a) { e.stopPropagation(); navigate({ name: 'artist', key: a.dataset.artist }); return }
   const al = e.target.closest('[data-album]')
-  if (al) { e.stopPropagation(); navigate({ name: 'album', key: al.dataset.album }) }
+  if (al) { e.stopPropagation(); navigate({ name: 'album', key: al.dataset.album }); return }
+  const ge = e.target.closest('[data-genre]')
+  if (ge) { e.stopPropagation(); navigate({ name: 'genre', key: ge.dataset.genre }) }
 }, true)
+
+$('np-radio').innerHTML = svg(I.radio, 18)
+$('np-radio').addEventListener('click', () => startRadio(currentSong))
+
+// ── Menú contextual (clic derecho en una canción) ────────────────────────────
+const ctxMenu = $('ctx-menu')
+
+function openSongMenu(song, x, y) {
+  const liked = likedPaths.has(song.path)
+  const items = [
+    ['radio', 'Iniciar radio (canciones parecidas)'],
+    ['like',  liked ? 'Quitar de Tus me gusta' : 'Guardar en Tus me gusta'],
+    ...(splitArtists(song.artist).length ? [['artist', 'Ir al artista']] : []),
+    ['album', 'Ir al álbum'],
+  ]
+  const genres = (song.genres || []).map(id => GENRE_BY_ID.get(id).name).join(', ')
+  ctxMenu.innerHTML = items.map(([k, t]) => `<button data-act="${k}">${esc(t)}</button>`).join('') +
+    `<div class="ctx-info">${genres ? 'Géneros: ' + esc(genres) : (lfm.ready ? 'Sin género detectado' : 'Conecta Last.fm para ver géneros')}</div>`
+  ctxMenu._song = song
+  ctxMenu.hidden = false
+  const r = ctxMenu.getBoundingClientRect()
+  ctxMenu.style.left = Math.min(x, innerWidth - r.width - 8) + 'px'
+  ctxMenu.style.top  = Math.min(y, innerHeight - r.height - 8) + 'px'
+}
+
+function closeMenu() { ctxMenu.hidden = true; ctxMenu._song = null }
+
+ctxMenu.addEventListener('click', e => {
+  const b = e.target.closest('[data-act]')
+  const s = ctxMenu._song
+  if (!b || !s) return
+  closeMenu()
+  if (b.dataset.act === 'radio')  startRadio(s)
+  if (b.dataset.act === 'like')   toggleLike(s)
+  if (b.dataset.act === 'artist') navigate({ name: 'artist', key: splitArtists(s.artist)[0].toLowerCase() })
+  if (b.dataset.act === 'album')  navigate({ name: 'album', key: albumKey(s) })
+})
+
+vsList.addEventListener('contextmenu', e => {
+  const li = e.target.closest('li.tr')
+  if (!li) return
+  e.preventDefault()
+  selectedIdx = +li.dataset.idx
+  renderList()
+  openSongMenu(viewSongs[selectedIdx], e.clientX, e.clientY)
+})
+for (const id of ['bar-cover', 'np-cover']) {
+  $(id).addEventListener('contextmenu', e => {
+    if (!currentSong) return
+    e.preventDefault()
+    openSongMenu(currentSong, e.clientX, e.clientY)
+  })
+}
+document.addEventListener('mousedown', e => { if (!ctxMenu.hidden && !ctxMenu.contains(e.target)) closeMenu() })
+document.addEventListener('scroll', closeMenu, true)
+window.addEventListener('blur', closeMenu)
+
+// ── Ajustes: API key de Last.fm ───────────────────────────────────────────────
+function openSettings() {
+  $('settings').hidden = false
+  $('lfm-msg').textContent = lfm.ready ? 'Last.fm ya está conectado. Puedes cambiar la key o borrarla para desconectar.' : ''
+  $('lfm-msg').className = 'modal-msg'
+  $('lfm-key').value = ''
+  $('lfm-key').focus()
+}
+function closeSettings() { $('settings').hidden = true }
+
+async function saveLastfmKey() {
+  const key = $('lfm-key').value.trim()
+  const msg = $('lfm-msg')
+  if (!key && !lfm.ready) { msg.textContent = 'Pega tu API key primero.'; msg.className = 'modal-msg err'; return }
+  msg.textContent = key ? 'Comprobando…' : 'Desconectando…'
+  msg.className = 'modal-msg'
+  $('lfm-save').disabled = true
+  const r = await api.lastfmSetKey(key)
+  $('lfm-save').disabled = false
+  if (!r.ok) { msg.textContent = r.error; msg.className = 'modal-msg err'; return }
+  closeSettings()
+  tagLibrary()
+}
+
+$('btn-settings').addEventListener('click', openSettings)
+$('lfm-cancel').addEventListener('click', closeSettings)
+$('lfm-save').addEventListener('click', saveLastfmKey)
+$('lfm-create').addEventListener('click', () => api.openExternal('https://www.last.fm/api/account/create'))
+$('lfm-key').addEventListener('keydown', e => {
+  if (e.key === 'Enter') saveLastfmKey()
+  if (e.key === 'Escape') closeSettings()
+})
+$('settings').addEventListener('mousedown', e => { if (e.target === $('settings')) closeSettings() })
 
 // Los botones no se quedan con el foco: así la barra espaciadora no los "pulsa"
 document.addEventListener('mousedown', e => { if (e.target.closest('button')) e.preventDefault() })
@@ -1360,7 +2288,7 @@ $('search').addEventListener('input', () => {
     const q = $('search').value.trim()
     $('search-clear').hidden = !q
     if (q) {
-      if (view.name === 'search') { view = { name: 'search', q }; openCollection() }
+      if (view.name === 'search') { view = { name: 'search', q }; buildSearch() }
       else navigate({ name: 'search', q })
     } else if (view.name === 'search') {
       goBack()
@@ -1369,7 +2297,7 @@ $('search').addEventListener('input', () => {
 })
 
 $('search').addEventListener('keydown', e => {
-  if (e.key === 'Enter' && view.name === 'search' && viewSongs.length) playFromView(0)
+  if (e.key === 'Enter' && view.name === 'search' && searchSongs.length) playSongAlone(searchSongs[0])
   if (e.key === 'Escape') e.target.blur()
 })
 
@@ -1389,6 +2317,8 @@ document.addEventListener('keydown', e => {
     return
   }
   if (e.target.tagName === 'INPUT') return
+  if (e.key === 'Escape' && !ctxMenu.hidden) { closeMenu(); return }
+  if (e.key === 'Escape' && !$('settings').hidden) { closeSettings(); return }
 
   if (e.code === 'Space') { e.preventDefault(); togglePlay() }
   else if (e.ctrlKey && e.key === 'ArrowRight') nextSong()

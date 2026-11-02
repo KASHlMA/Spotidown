@@ -1,3 +1,5 @@
 node_modules/
 .superpowers/
 dist/
+# API key personal de Last.fm
+lastfm-key.txt

@@ -1,9 +1,11 @@
-const { app, BrowserWindow, ipcMain, shell, nativeImage } = require('electron')
+const { app, BrowserWindow, ipcMain, shell, nativeImage, utilityProcess } = require('electron')
 const path = require('path')
 const fs   = require('fs')
+const createLastfm = require('./lastfm')
 
 const MUSIC_DIR = app.getPath('music')
 const CACHE_PATH = path.join(app.getPath('userData'), 'music-cache.json')
+const lastfm = createLastfm(app.getPath('userData'))
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -27,6 +29,7 @@ app.whenReady().then(() => {
   watchMusicDir()
 })
 app.on('window-all-closed', () => app.quit())
+app.on('before-quit', () => { lastfm.flush(); saveAudio() })
 
 // ── Acceso directo en escritorio ──────────────────────────────────────────────
 function createShortcut() {
@@ -46,16 +49,27 @@ function createShortcut() {
 }
 
 // ── Watcher: recarga cuando se añade música ───────────────────────────────────
+// mtime de cada MP3 según el último escaneo. En Windows fs.watch también avisa
+// cuando un archivo sólo se LEE (fecha de último acceso), así que se compara el
+// mtime para no re-escanear la biblioteca cada vez que se analiza una canción.
+const knownMtimes = new Map()
+
 function watchMusicDir() {
   let debounce = null
+  const notify = () => {
+    clearTimeout(debounce)
+    debounce = setTimeout(() => {
+      const win = BrowserWindow.getAllWindows()[0]
+      if (win) win.webContents.send('library-changed')
+    }, 3000)
+  }
   try {
     fs.watch(MUSIC_DIR, { recursive: true }, (_, filename) => {
       if (!filename?.toLowerCase().endsWith('.mp3')) return
-      clearTimeout(debounce)
-      debounce = setTimeout(() => {
-        const win = BrowserWindow.getAllWindows()[0]
-        if (win) win.webContents.send('library-changed')
-      }, 3000)
+      const full = path.join(MUSIC_DIR, filename)
+      fs.promises.stat(full)
+        .then(st => { if (knownMtimes.get(full) !== st.mtimeMs) notify() })
+        .catch(() => { if (knownMtimes.has(full)) notify() })   // se borró o se renombró
     })
   } catch (e) { console.error('watchMusicDir error:', e.message) }
 }
@@ -105,6 +119,8 @@ ipcMain.handle('scan-music', async () => {
   }
   await walk(MUSIC_DIR)
   results.sort((a, b) => a.path.localeCompare(b.path))
+  knownMtimes.clear()
+  for (const r of results) knownMtimes.set(r.path, r.mtime)
   return results
 })
 
@@ -164,6 +180,72 @@ ipcMain.handle('read-meta', async (_, filePath) => {
     console.error('read-meta ERROR:', filePath, e.message)
     return { title: path.basename(filePath, '.mp3'), artist: '', album: '', duration: 0, cover: null, lyrics: '' }
   }
+})
+
+// ── IPC: Last.fm (géneros y radio) ───────────────────────────────────────────
+ipcMain.handle('lastfm-status',  () => ({ hasKey: lastfm.hasKey() }))
+ipcMain.handle('lastfm-set-key', (_, key) => lastfm.setKey(key))
+ipcMain.handle('lastfm-cached',  () => lastfm.cached())
+ipcMain.handle('lastfm-tags',    (_, q) => lastfm.tags(q))
+ipcMain.handle('lastfm-similar', (_, q) => lastfm.similar(q))
+
+// ── IPC: análisis de audio (género por canción y "huella" para la radio) ─────
+const AUDIO_PATH = path.join(app.getPath('userData'), 'audio-features.json')
+let audioStore = null
+let audioWorker = null
+let audioSaveTimer = null
+
+function loadAudio() {
+  if (audioStore) return audioStore
+  try { audioStore = JSON.parse(fs.readFileSync(AUDIO_PATH, 'utf8')) } catch {}
+  if (!audioStore?.songs) audioStore = { version: 1, songs: {} }
+  return audioStore
+}
+function saveAudio() {
+  clearTimeout(audioSaveTimer)
+  audioSaveTimer = null
+  if (!audioStore) return
+  try { fs.writeFileSync(AUDIO_PATH, JSON.stringify(audioStore)) }
+  catch (e) { console.error('audio save error:', e.message) }
+}
+const toRenderer = (ch, data) => BrowserWindow.getAllWindows()[0]?.webContents.send(ch, data)
+
+function startAudioWorker() {
+  if (audioWorker) return audioWorker
+  audioWorker = utilityProcess.fork(path.join(__dirname, 'audio-worker.js'), [], { serviceName: 'Análisis de audio' })
+  audioWorker.on('message', msg => {
+    if (msg.type === 'result' || msg.type === 'lyrics') {
+      const songs = loadAudio().songs
+      if (msg.type === 'result') songs[msg.path] = msg.data
+      else if (songs[msg.path]) songs[msg.path].lyr = msg.lyr
+      else return
+      // A lo mucho un guardado cada 5 s mientras llegan resultados
+      if (!audioSaveTimer) audioSaveTimer = setTimeout(saveAudio, 5000)
+      toRenderer('audio-result', { path: msg.path, data: songs[msg.path] })
+    } else {
+      toRenderer('audio-progress', msg)
+    }
+  })
+  audioWorker.on('exit', () => { audioWorker = null })
+  return audioWorker
+}
+
+ipcMain.handle('audio-cached', () => loadAudio().songs)
+
+// files = toda la biblioteca [{ path, mtime }]: se limpia lo borrado y se encola lo nuevo
+ipcMain.handle('audio-analyze', (_, files) => {
+  const store = loadAudio()
+  const alive = new Set(files.map(f => f.path))
+  for (const p of Object.keys(store.songs)) if (!alive.has(p)) delete store.songs[p]
+  const todo = files.filter(f => store.songs[f.path]?.mtime !== f.mtime)
+  // Analizadas antes de que existiera el ánimo por letra: sólo falta leer la letra
+  const lyrics = files.filter(f => { const s = store.songs[f.path]; return s?.mtime === f.mtime && !s.error && s.lyr === undefined })
+  if (todo.length || lyrics.length) startAudioWorker().postMessage({ type: 'analyze', items: todo, lyrics })
+  return todo.length + lyrics.length
+})
+
+ipcMain.on('open-external', (_, url) => {
+  if (/^https:\/\//.test(url)) shell.openExternal(url)
 })
 
 // ── IPC: control de ventana ───────────────────────────────────────────────────
