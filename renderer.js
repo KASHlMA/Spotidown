@@ -1822,7 +1822,7 @@ function weightedPick(items, weight) {
 const DJ_CTX = { key: 'dj:', title: 'DJ Nat' }
 const dj = {
   on: false, ai: false, vibe: null, recent: [], played: new Set(), next: null, prep: null, alt: null, altPrep: null, sinceHello: 0,
-  quietUntil: 0, prepWip: null,   // hasta cuándo no se graba nada en segundo plano (le acabas de escribir)
+  quietUntil: 0, prepWip: null, voiceWaiting: false,   // hasta cuándo no se graba nada en segundo plano (le acabas de escribir)
   sameVibe: 0, used: new Set(),   // bloques seguidos en la misma vibra / canciones ya puestas en la sesión
   log: [], thinking: false, speaking: false,
 }
@@ -2201,7 +2201,7 @@ function duck(on) {
 
 const djAudio = $('dj-voice')
 // onNearEnd: se llama cuando a la voz le falta ~1.5 s (ahí entra la música nueva)
-function speak(text, file, onNearEnd) {
+function speak(text, file, onNearEnd, { keepDuck = false } = {}) {
   return new Promise(resolve => {
     let done = false, near = false
     const nearEnd = () => { if (!near) { near = true; onNearEnd?.() } }
@@ -2212,7 +2212,7 @@ function speak(text, file, onNearEnd) {
       djAudio.ontimeupdate = null
       nearEnd()
       dj.speaking = false
-      duck(false)
+      if (!keepDuck) duck(false)
       renderDjPanel()
       resolve()
     }
@@ -2286,7 +2286,7 @@ function streamVoice(id, { onFirst, onNearEnd, after }) {
   }
   // after: lo que está sonando antes (el saludo grabado); mientras, los pedazos se guardan
   if (after) after.then(() => { gateOpen = true; for (const b of pending.splice(0)) schedule(b); check() })
-  voiceStreams.set(id, b64 => gateOpen ? schedule(b64) : pending.push(b64))
+  voiceStreams.set(id, b64 => { dj.voiceWaiting = true; gateOpen ? schedule(b64) : pending.push(b64) })
   const stop = () => { clearInterval(timer); voiceStreams.delete(id) }
   return {
     started: () => next > 0 || pending.length > 0,
@@ -2588,7 +2588,31 @@ const DJ_ACKS = {
     'Si te gustó lo anterior, espérate a lo que sigue.',
   ],
 }
+DJ_ACKS.wait = [
+  'Ya casi lo tengo, te va a encantar.',
+  'Estoy escogiendo las mejores, aguántame tantito.',
+  'Esto vale la pena, ya mero sale.',
+  'Le estoy dando el toque final.',
+  'Ya lo estoy cargando en las bocinas.',
+  'Un segundito más y te lo suelto.',
+  'Confía en mí, ya viene lo bueno.',
+  'Buscando la rola perfecta para ti.',
+]
 let djAckLog = []   // las últimas que dijo, para no repetirlas seguido
+// Tapa la espera: minifrase al instante y, si al acabar todavía no llega la respuesta, una de
+// espera. La música se queda bajita entre las dos. Regresa la promesa para el "after" de djPlay.
+async function coverWith(kind) {
+  dj.voiceWaiting = false
+  const ack = await cachedAck(kind)
+  if (!ack) return undefined
+  return (async () => {
+    await speak(ack.text, ack.file, undefined, { keepDuck: true })
+    if (dj.voiceWaiting) return   // la respuesta ya llegó: entra pegadita
+    const w = await cachedAck('wait')
+    if (w && !dj.voiceWaiting) await speak(w.text, w.file, undefined, { keepDuck: true })
+  })()
+}
+
 async function cachedAck(kind) {
   if (!dj.ai) return null
   const ready = []
@@ -2746,8 +2770,7 @@ function djNextBlock() {
       dj.prepWip = null
       const keep = line && (!block.hora || block.hora === clockText(Date.now()))
       if (!keep) { block.ahead = 0; block.timed = block.hora = undefined }
-      const ack = await cachedAck('next')
-      await djPlay(block, keep ? { line } : undefined, ack ? speak(ack.text, ack.file) : undefined)
+      await djPlay(block, keep ? { line } : undefined, await coverWith('next'))
       return
     }
     // La hora ya no cuadra (te brincaste canciones): mismas rolas con la frase sin hora (ya
@@ -2763,8 +2786,7 @@ function djNextBlock() {
     if (dj.next) { const { block, line, file } = dj.next; await djPlay(block, { line, file }); return }
     const block = await continueBlock()
     if (!block) return
-    const ack = await cachedAck('next')
-    await djPlay(block, undefined, ack ? speak(ack.text, ack.file) : undefined)
+    await djPlay(block, undefined, await coverWith('next'))
   })
 }
 
@@ -2775,8 +2797,7 @@ function djSwitch() {
     if (alt && alt.block.vibe.key !== dj.vibe?.key) { await djPlay(alt.block, { line: alt.line, file: alt.file }); return }
     const block = newBlock('switch', dj.vibe ? [dj.vibe.key] : [])
     if (!block) return
-    const ack = await cachedAck('switch')
-    await djPlay(block, undefined, ack ? speak(ack.text, ack.file) : undefined)
+    await djPlay(block, undefined, await coverWith('switch'))
   })
 }
 
@@ -2917,8 +2938,7 @@ async function djAsk(text) {
   dj.thinking = true
   renderDjPanel()
   // Mientras arma la respuesta dice algo corto ya grabado ("¡Sale! Ahorita te lo busco")
-  const ack = await cachedAck('ask')
-  const after = ack ? speak(ack.text, ack.file) : undefined
+  const after = await coverWith('ask')
   let plan = null
   if (dj.ai) {
     const r = await api.djThink(
