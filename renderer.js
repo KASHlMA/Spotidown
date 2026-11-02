@@ -2269,10 +2269,10 @@ async function djStart() {
 const GREETINGS = {
   madrugada: [
     '¡Qué onda, {n}! Aquí DJ Nat, desvelándome contigo.',
-    '¡Buenas noches, {n}! Soy DJ Nat, ¿otra vez desvelándonos?',
+    '¡Ey, {n}! Soy DJ Nat, ¿otra vez de desvelo en plena madrugada?',
     '¡Hey, {n}! DJ Nat en la madrugada, aquí seguimos al pie del cañón.',
     '¡{n}! Aquí DJ Nat, pa la desvelada no hay nada como buena música.',
-    'Qué onda, {n}, DJ Nat al habla. La noche todavía no se acaba.',
+    '¡Qué onda, {n}! DJ Nat al habla, ya de madrugada y seguimos con todo.',
   ],
   manana: [
     '¡Buenos días, {n}! Soy DJ Nat, ¿cómo amaneciste?',
