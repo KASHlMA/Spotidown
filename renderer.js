@@ -347,6 +347,9 @@ const GENRES = [
   { id: 'cumbia',     name: 'Cumbia',            color: [230, 120, 20], tags: ['cumbia', 'cumbia villera', 'cumbia sonidera', 'tecnocumbia', 'cumbia mexicana', 'cumbia norteña', 'cumbia nortena', 'cumbia andina', 'cumbia colombiana', 'chicha', 'cumbia pop', 'electrocumbia', 'eletrocumbia', 'electro cumbia', 'cumbia electronica', 'cumbia electrónica', 'cumbia rebajada'] },
   { id: 'corridos',   name: 'Corridos',          color: [120, 80, 40],  tags: ['corridos tumbados', 'corridos', 'corrido', 'corridos belicos', 'corridos bélicos', 'corrido tumbado', 'sierreno', 'sierreño', 'tumbado'] },
   { id: 'regional',   name: 'Regional mexicano', color: [30, 120, 60],  tags: ['regional mexicano', 'regional mexican', 'musica mexicana', 'música mexicana', 'banda', 'banda sinaloense', 'norteno', 'norteño', 'grupera', 'grupero', 'mariachi', 'ranchera', 'duranguense', 'tejano', 'tex-mex'] },
+  // Grabaciones en vivo: se detectan por el título o el álbum ("(En Vivo)", "Live at…"), no por Last.fm
+  { id: 'envivo',     name: 'En vivo',           color: [180, 30, 60],  tags: ['en vivo', 'live recording'],
+    alias: ['en vivo', 'vivo', 'live', 'concierto', 'conciertos', 'directo'] },
   { id: 'reggaeton',  name: 'Reggaetón',         color: [220, 40, 140], tags: ['reggaeton', 'reggaetón', 'regueton', 'perreo', 'dembow', 'urbano latino', 'latin urban', 'neoperreo', 'urbano'] },
   { id: 'trap-latino',name: 'Trap latino',       color: [90, 40, 160],  tags: ['latin trap', 'trap latino', 'trap en español', 'trap en espanol', 'spanish trap', 'argentine trap', 'trap argentino'] },
   { id: 'bachata',    name: 'Bachata',           color: [180, 30, 80],  tags: ['bachata'] },
@@ -418,6 +421,7 @@ function styleToGenre(name) {
 // Ritmos que el audio reconoce con mucha seguridad: mandan sobre el género del artista
 const AUDIO_DISTINCT = new Set(['cumbia', 'salsa', 'merengue', 'vallenato', 'regional', 'reggaeton'])
 const AUDIO_FAMILY   = { regional: ['corridos'], reggaeton: ['trap-latino', 'pop-latino'] }
+const LIVE_RE = /\b(en vivo|en directo|ao vivo)\b|[([/]\s*live\b|-\s*live\b|\blive (at|from|in|en|desde)\b/i
 const TITLE_HINT = /\b(cumbia|cumbias|salsa|bachata|merengue|vallenato|corrido|corridos)\b/i
 const TITLE_HINT_GENRE = { cumbia: 'cumbia', cumbias: 'cumbia', salsa: 'salsa', bachata: 'bachata', merengue: 'merengue',
                            vallenato: 'vallenato', corrido: 'corridos', corridos: 'corridos' }
@@ -568,6 +572,8 @@ function applyTags(song) {
       score.set(id, v)
     }
   }
+  // Peso bajo a propósito: "En vivo" no es el género principal (un corrido en vivo sigue siendo corrido)
+  if (LIVE_RE.test(song.title || '') || LIVE_RE.test(song.album || '')) score.set('envivo', Math.max(score.get('envivo') || 0, 0.3))
   const dance = Math.max(0, ...DANCE_GENRES.map(id => score.get(id) || 0))
   if (dance >= 0.45) score.set('m-bailar', Math.max(score.get('m-bailar') || 0, 0.3))
   song.genreScore = score
@@ -1940,9 +1946,9 @@ function personalFact() {
   if (minutes >= 60) facts.push(`esta semana lleva como ${minutes >= 120 ? Math.round(minutes / 60) + ' horas' : minutes + ' minutos'} de música`)
   if (genre?.[1] >= 5) facts.push(`el género que más escuchó esta semana es ${GENRE_BY_ID.get(genre[0]).name}`)
   const last = load('djLastFact', '')
-  const pool = facts.filter(f => f.replace(/d+/g, '') !== last)
+  const pool = facts.filter(f => f.replace(/\d+/g, '') !== last)
   const pick = (pool.length ? pool : facts)[Math.floor(Math.random() * (pool.length || facts.length))]
-  if (pick) save('djLastFact', pick.replace(/d+/g, ''))
+  if (pick) save('djLastFact', pick.replace(/\d+/g, ''))
   return pick || null
 }
 
