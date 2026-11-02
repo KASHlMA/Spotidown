@@ -1901,27 +1901,48 @@ function startVibe() {
   return pickVibe(starts, [], true) || pickVibe([], [], true)
 }
 
-// Lo más escuchado de la semana, para que Nat lo comente de vez en cuando
+// Lo más escuchado de la semana (y de hoy), para que Nat lo comente de vez en cuando.
+// Los minutos son aproximados: duración de la canción × veces que la escuchaste
 function weekStats() {
-  const t = Date.now() - 7 * 864e5, byArtist = new Map(), bySong = new Map()
+  const now = Date.now(), t = now - 7 * 864e5, today = new Date().setHours(0, 0, 0, 0)
+  const byArtist = new Map(), artistMin = new Map(), bySong = new Map(), songToday = new Map(), byGenre = new Map()
+  let minutes = 0
+  const inc = (m, k, v = 1) => m.set(k, (m.get(k) || 0) + v)
   for (const [p, ts] of playLog) {
     if (ts < t) continue
     const s = songByPath.get(p)
     if (!s) continue
+    const min = (s.duration || 180) / 60
+    minutes += min
     const a = splitArtists(s.artist)[0]
-    if (a) byArtist.set(a, (byArtist.get(a) || 0) + 1)
-    bySong.set(s, (bySong.get(s) || 0) + 1)
+    if (a) { inc(byArtist, a); inc(artistMin, a, min) }
+    inc(bySong, s)
+    if (ts >= today) inc(songToday, s)
+    const g = mainGenre(s)
+    if (g) inc(byGenre, g)
   }
   const top = m => [...m].sort((x, y) => y[1] - x[1])[0]
-  return { artist: top(byArtist), song: top(bySong) }
+  const artist = top(byArtist)
+  return { artist, artistMin: artist && Math.round(artistMin.get(artist[0])), song: top(bySong),
+           songToday: top(songToday), genre: top(byGenre), minutes: Math.round(minutes) }
 }
 
+// Un dato al azar de lo que has escuchado; no repite el último que dijo
 function personalFact() {
-  const { artist, song } = weekStats()
+  const { artist, artistMin, song, songToday, genre, minutes } = weekStats()
+  const name = s => `${cleanTitle(s.title)} de ${splitArtists(s.artist)[0]}`
   const facts = []
   if (artist?.[1] >= 3) facts.push(`esta semana escuchó ${artist[1]} veces a ${artist[0]}`)
-  if (song?.[1] >= 3) facts.push(`la rola que más escuchó esta semana es ${cleanTitle(song[0].title)} de ${splitArtists(song[0].artist)[0]} (${song[1]} veces)`)
-  return facts.length ? facts[Math.floor(Math.random() * facts.length)] : null
+  if (artistMin >= 15) facts.push(`esta semana lleva como ${artistMin} minutos escuchando a ${artist[0]}`)
+  if (song?.[1] >= 3) facts.push(`la rola que más ha repetido esta semana es ${name(song[0])} (${song[1]} veces)`)
+  if (songToday?.[1] >= 3) facts.push(`hoy ya repitió ${songToday[1]} veces ${name(songToday[0])}`)
+  if (minutes >= 60) facts.push(`esta semana lleva como ${minutes >= 120 ? Math.round(minutes / 60) + ' horas' : minutes + ' minutos'} de música`)
+  if (genre?.[1] >= 5) facts.push(`el género que más escuchó esta semana es ${GENRE_BY_ID.get(genre[0]).name}`)
+  const last = load('djLastFact', '')
+  const pool = facts.filter(f => f.replace(/d+/g, '') !== last)
+  const pick = (pool.length ? pool : facts)[Math.floor(Math.random() * (pool.length || facts.length))]
+  if (pick) save('djLastFact', pick.replace(/d+/g, ''))
+  return pick || null
 }
 
 function weatherText() {
@@ -1954,10 +1975,12 @@ const DJ_SYSTEM =
 const DJ_TASK = {
   welcome: 'El usuario acaba de abrir la app. Salúdalo con el saludo y su nombre (si lo hay), preséntate ("soy DJ Nat"), si viene el clima coméntalo en pocas palabras, dile la hora ' +
            'tal cual viene en los datos (con números, ej. "son las 11:30 p. m."), y dile que empiezan con una playlist que ' +
-           'le hiciste, mencionando la vibra y la primera rola. Si es de madrugada, puedes comentarlo. Máximo 30 palabras.',
+           'le hiciste, mencionando la vibra y la primera rola. Si viene un dato personal, coméntalo de forma natural y ' +
+           'con sus números (ej. "esta semana llevas 95 minutos con Bad Bunny"). Si es de madrugada, puedes comentarlo. Máximo 40 palabras.',
   welcome2: 'Ya lo saludaste hace un segundo: NO vuelvas a saludar ni a presentarte. Dile la hora tal cual viene en los ' +
             'datos (con números, ej. "son las 11:30 p. m.") y que empiezan con una playlist que le hiciste, mencionando la ' +
-            'vibra y la primera rola. Máximo 25 palabras.',
+            'vibra y la primera rola. Si viene un dato personal, coméntalo de forma natural y con sus números ' +
+            '(ej. "hoy ya repetiste 5 veces Gil"). Máximo 35 palabras.',
   intro:   'Es la primera canción de la sesión: un saludo muy corto (dos o tres palabras) y presenta el bloque.',
   next:    'Haz la transición al siguiente bloque como en la radio, sin saludar.',
   continue: 'Siguen con la misma vibra de antes: haz la transición diciendo que continúan con ese mood o estilo ' +
@@ -2012,6 +2035,8 @@ async function djLine(kind, block) {
     f.hora = d.toLocaleTimeString('es-MX', { hour: 'numeric', minute: '2-digit', hour12: true })
     f.dia = DAYS[d.getDay()]
     if (weather?.kind) f.clima = weatherText()   // sólo si llueve, hace calor o frío
+    const fact = Math.random() < 0.5 && personalFact()
+    if (fact) f.dato_personal = fact
     block.timed = Date.now()
   }
   // Cada 3 bloques (contando desde el saludo) dice tu nombre y la hora, como en la radio
