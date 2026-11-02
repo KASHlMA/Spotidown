@@ -271,6 +271,7 @@ img { display: block; }
 .modal-h3 { font-size: 15px; font-weight: 700; margin: 18px 0 6px; color: var(--white); }
 .modal-h3:first-of-type { margin-top: 0; }
 .modal-text { font-family: inherit; }
+.modal-gap { margin-top: 8px; }
 .modal-check { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 14px; color: var(--t2); cursor: pointer; }
 .modal-check input { width: 16px; height: 16px; accent-color: var(--green); }
 .modal { max-height: calc(100vh - 32px); overflow-y: auto; }

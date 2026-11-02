@@ -1916,6 +1916,11 @@ function personalFact() {
   return facts.length ? facts[Math.floor(Math.random() * facts.length)] : null
 }
 
+function weatherText() {
+  const k = { lluvia: 'está lloviendo', calor: 'hace mucho calor', frio: 'hace frío' }[weather.kind] || 'clima normal'
+  return `${k} en ${weather.city || 'su ciudad'}, ${weather.temp} °C`
+}
+
 function blockFacts(block) {
   const first = block.songs[0], p = plays[first.path]
   const old = block.songs.find(forgotten)
@@ -1939,7 +1944,7 @@ const DJ_SYSTEM =
   'listas ni acotaciones entre paréntesis. Háblale de tú. Varía tus frases: no empieces siempre igual.'
 
 const DJ_TASK = {
-  welcome: 'El usuario acaba de abrir la app. Salúdalo con el saludo y su nombre (si lo hay), preséntate ("soy DJ Nat"), dile la hora ' +
+  welcome: 'El usuario acaba de abrir la app. Salúdalo con el saludo y su nombre (si lo hay), preséntate ("soy DJ Nat"), si viene el clima coméntalo en pocas palabras, dile la hora ' +
            'tal cual viene en los datos (con números, ej. "son las 11:30 p. m."), y dile que empiezan con una playlist que ' +
            'le hiciste, mencionando la vibra y la primera rola. Si es de madrugada, puedes comentarlo. Máximo 30 palabras.',
   welcome2: 'Ya lo saludaste hace un segundo: NO vuelvas a saludar ni a presentarte. Dile la hora tal cual viene en los ' +
@@ -1998,6 +2003,7 @@ async function djLine(kind, block) {
     f.nombre = userName || undefined
     f.hora = d.toLocaleTimeString('es-MX', { hour: 'numeric', minute: '2-digit', hour12: true })
     f.dia = DAYS[d.getDay()]
+    if (weather?.kind) f.clima = weatherText()   // sólo si llueve, hace calor o frío
     block.timed = Date.now()
   }
   // Cada 3 bloques (contando desde el saludo) dice tu nombre y la hora, como en la radio
@@ -2017,6 +2023,9 @@ async function djLine(kind, block) {
     } else if (roll >= 0.3 && roll < 0.5) {
       f.dia = DAYS[new Date().getDay()]
       task += ' Menciona el día de forma natural (ej. "pa ambientar este lunes").'
+    } else if (roll >= 0.5 && roll < 0.65 && weather?.kind) {
+      f.clima = weatherText()
+      task += ' Comenta el clima de forma natural (ej. "con esta lluvia se antoja…").'
     }
   }
   if (dj.ai) {
@@ -2273,6 +2282,9 @@ const GREETINGS = {
     '¡Hey, {n}! DJ Nat en la madrugada, aquí seguimos al pie del cañón.',
     '¡{n}! Aquí DJ Nat, pa la desvelada no hay nada como buena música.',
     '¡Qué onda, {n}! DJ Nat al habla, ya de madrugada y seguimos con todo.',
+    '¡Shhh, {n}! Aquí DJ Nat bajito, que los demás duermen pero nosotros no.',
+    '¡Qué onda, {n}! DJ Nat aquí, ¿no puedes dormir? Yo te hago compañía.',
+    '¡{n}, ya es tardísimo! Pero bueno, DJ Nat se queda contigo en el desvelo.',
   ],
   manana: [
     '¡Buenos días, {n}! Soy DJ Nat, ¿cómo amaneciste?',
@@ -2280,6 +2292,9 @@ const GREETINGS = {
     '¡Buenos días, {n}! DJ Nat reportándose, vamos a empezar con todo.',
     '¡Arriba, {n}! Aquí DJ Nat pa despertarte con buena música.',
     '¡Qué tal, {n}! DJ Nat por acá, ¿ya con tu cafecito?',
+    '¡Buenos días, buenos días, {n}! DJ Nat con toda la energía.',
+    '¡Ey, {n}! DJ Nat aquí, vamos a despertar al mundo con música.',
+    '¡Mañanita bonita, {n}! Soy DJ Nat, empecemos tranquis.',
   ],
   tarde: [
     '¡Buenas tardes, {n}! Soy DJ Nat, qué gusto tenerte de vuelta.',
@@ -2287,6 +2302,9 @@ const GREETINGS = {
     '¡Buenas tardes, {n}! DJ Nat al habla, vamos a ponerle sabor al día.',
     '¡Hey, {n}! Aquí DJ Nat, ¿cómo te está tratando la tarde?',
     '¡{n}, qué gusto! Soy DJ Nat, ya te tenía unas rolas preparadas.',
+    '¡Qué onda, {n}! DJ Nat aquí, la tarde está pa ponerle música.',
+    '¡Ey, {n}! Aquí DJ Nat, hora de un break con buenas rolas.',
+    '¡{n}! Soy DJ Nat, ¿cansancio de la tarde? Esto lo arregla.',
   ],
   noche: [
     '¡Buenas noches, {n}! Soy DJ Nat, qué bueno que llegaste.',
@@ -2294,6 +2312,9 @@ const GREETINGS = {
     '¡Buenas noches, {n}! DJ Nat en cabina, ¿cómo estuvo tu día?',
     '¡Hey, {n}! Aquí DJ Nat, la noche apenas empieza.',
     '¡{n}! Soy DJ Nat, ya te estaba esperando pa la noche.',
+    '¡Uy, {n}! Aquí DJ Nat, la noche pinta bien.',
+    '¡Qué onda, {n}! DJ Nat aquí, a relajarnos después de todo el día.',
+    '¡Ey, {n}! Soy DJ Nat, llegó la hora buena de la noche.',
   ],
 }
 // Especiales según el día de la semana (0 = domingo … 6 = sábado), además de los de arriba
@@ -2302,19 +2323,48 @@ const GREETINGS_DAY = {
        noche: ['¡Buenas noches, {n}! Soy DJ Nat, cerremos el domingo bien bonito.'] },
   1: { manana: ['¡Buenos días, {n}! DJ Nat aquí, ánimo que ya es lunes.',
                 '¡Feliz lunes, {n}! Soy DJ Nat, vamos a empezar la semana con todo.'] },
+  2: { manana: ['¡Buenos días, {n}! DJ Nat aquí, martes y con todo.'],
+       noche: ['¡Qué onda, {n}! Soy DJ Nat, ya sobrevivimos al martes.'] },
+  3: { manana: ['¡Ya es miércoles, {n}! Soy DJ Nat, mitad de semana y vamos bien.'],
+       tarde: ['¡Miércoles, {n}! Aquí DJ Nat, ya vamos de bajada.'] },
+  4: { tarde: ['¡Jueves, {n}! Aquí DJ Nat, ya casi es viernes.'],
+       noche: ['¡Jueves en la noche, {n}! DJ Nat aquí, mañana ya es viernes.'] },
   5: { tarde: ['¡Ya es viernes, {n}! Aquí DJ Nat, esto ya huele a fin de semana.'],
        noche: ['¡Viernes en la noche, {n}! Soy DJ Nat y hoy se arma.'] },
   6: { noche: ['¡Sábado, {n}! DJ Nat aquí, hoy es noche de fiesta.',
                '¡Qué onda, {n}! Aquí DJ Nat, sábado en la noche y con ganas de bailar.'],
        madrugada: ['¡Sábado de desvelo, {n}! Aquí DJ Nat, la fiesta sigue.'] },
 }
+// Según el clima (Open-Meteo): tienen prioridad cuando aplican
+const GREETINGS_WEATHER = {
+  lluvia: [
+    '¡Qué onda, {n}! Aquí DJ Nat, con esta lluvia se antoja música bonita.',
+    '¡{n}! Soy DJ Nat, afuera llueve y aquí adentro ponemos el ambiente.',
+    '¡Hey, {n}! DJ Nat aquí, con esta lluvia se antoja cobijita y buenas rolas.',
+  ],
+  calor: [
+    '¡Qué onda, {n}! Aquí DJ Nat, ¡qué calorón! Vamos a refrescarnos con música.',
+    '¡{n}! Soy DJ Nat, hace un calor de los buenos, así que súbele.',
+    '¡Hey, {n}! DJ Nat aquí, con este calorón las rolas pegan más.',
+  ],
+  frio: [
+    '¡Qué onda, {n}! Aquí DJ Nat, hace un fresquecito, ¿ya con tu cobija?',
+    '¡{n}! Soy DJ Nat, con este frío se antoja algo calientito y buena música.',
+    '¡Brr, {n}! DJ Nat aquí, hace frío pero la música nos calienta.',
+  ],
+}
+let weather = null   // { city, temp, kind: 'lluvia' | 'calor' | 'frio' | null }
+let djCity = load('djCity', '')
+async function refreshWeather() { weather = await api.weather(djCity).catch(() => null) }
+
 const partOfDay = (h = new Date().getHours()) => h < 6 ? 'madrugada' : h < 12 ? 'manana' : h < 19 ? 'tarde' : 'noche'
 // Sin nombre: "¡{n}! Soy…" → "Soy…", "¡{n}, qué gusto!" → "¡Qué gusto!", ", {n}" se quita
 const greetingText = t => userName ? t.replaceAll('{n}', userName)
   : t.replace(/¡\{n\}! /, '').replace(/¡\{n\}, (\S)/, (m, c) => '¡' + c.toUpperCase()).replace(/, \{n\}/g, '')
 const greetingsNow = (d = new Date()) => {
   const part = partOfDay(d.getHours())
-  return [...GREETINGS[part], ...(GREETINGS_DAY[d.getDay()]?.[part] || [])].map(greetingText)
+  return [...GREETINGS[part], ...(GREETINGS_DAY[d.getDay()]?.[part] || []),
+          ...(GREETINGS_WEATHER[weather?.kind] || [])].map(greetingText)
 }
 
 async function cachedGreeting() {
@@ -2342,7 +2392,7 @@ async function warmGreetings() {
   greetWarming = true
   try {
     // Primero los de este momento (y los especiales de hoy), luego todos los demás
-    const all = [...greetingsNow(), ...Object.values(GREETINGS).flat(),
+    const all = [...greetingsNow(), ...Object.values(GREETINGS).flat(), ...Object.values(GREETINGS_WEATHER).flat(),
                  ...Object.values(GREETINGS_DAY).flatMap(d => Object.values(d).flat())].map(greetingText)
     for (const t of [...new Set(all)]) {
       if (await api.djCached(t)) continue
@@ -2363,6 +2413,7 @@ function prepareWelcome() {
     for (let i = 0; i < 50 && !getGenreGroups().genres.length; i++) await new Promise(r => setTimeout(r, 300))
     if (!(await api.geminiStatus()).hasKey || welcomed) return
     dj.ai = true
+    await refreshWeather()
     const block = startBlock('welcome')
     if (!block) return
     const line = await djLine('welcome', block)
@@ -3111,6 +3162,7 @@ function openSettings() {
   $('lfm-msg').textContent = lfm.ready ? 'Last.fm ya está conectado. Pega otra key sólo si quieres cambiarla.' : ''
   $('gem-msg').textContent = dj.ai ? 'Gemini ya está conectado. Pega otra key sólo si quieres cambiarla.' : ''
   $('dj-name').value = userName
+  $('dj-city').value = djCity
   $('lfm-msg').className = $('gem-msg').className = 'modal-msg'
   $('lfm-key').value = $('gem-key').value = ''
   $('lfm-key').focus()
@@ -3120,6 +3172,11 @@ function closeSettings() { $('settings').hidden = true }
 // Guarda nombre y bienvenida, y sólo las keys que se escribieron (cada una se comprueba antes)
 async function saveSettings() {
   userName = $('dj-name').value.trim()
+  if ($('dj-city').value.trim() !== djCity) {
+    djCity = $('dj-city').value.trim()
+    save('djCity', djCity)
+    refreshWeather()
+  }
   save('userName', userName)
   const lk = $('lfm-key').value.trim(), gk = $('gem-key').value.trim()
   if (!lk && !gk) { closeSettings(); return }

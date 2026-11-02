@@ -256,6 +256,50 @@ ipcMain.handle('gemini-set-key', (_, key) => gemini.setKey(key))
 ipcMain.handle('dj-say', wrap((text, engine) => engine === 'gemini' ? gemini.say(text) : voice.say(text)))
 // En vivo: el audio llega al renderer por pedazos ('dj-chunk') para que Nat hable al instante
 ipcMain.handle('dj-cached', (_, text) => gemini.cached(text))
+
+// ── IPC: clima (Open-Meteo, gratis y sin key) para que DJ Nat lo comente ───────
+// Ubicación: la ciudad que escribiste en Ajustes o, si no, la aproximada por tu IP.
+// Se guarda la ubicación y el clima se consulta como mucho cada 30 min.
+const WEATHER_PATH = path.join(app.getPath('userData'), 'weather.json')
+let weatherCache = null
+ipcMain.handle('weather', async (_, city) => {
+  city = String(city || '').trim()
+  try {
+    const saved = weatherCache || (() => { try { return JSON.parse(fs.readFileSync(WEATHER_PATH, 'utf8')) } catch { return {} } })()
+    if (saved.at && Date.now() - saved.at < 30 * 60 * 1000 && saved.query === city) return saved.data
+    let loc = saved.query === city ? saved.loc : null
+    if (!loc && city) {
+      // "Cuautla, Morelos": se busca la ciudad y se prefiere la del estado que dijiste
+      // (sólo "Morelos" da pueblos de Coahuila, Zacatecas… antes que el estado)
+      const [name, region = ''] = city.split(',').map(x => x.trim())
+      const g = await (await fetch(`https://geocoding-api.open-meteo.com/v1/search?count=10&language=es&name=${encodeURIComponent(name)}`,
+        { signal: AbortSignal.timeout(10000) })).json()
+      const fold = x => String(x || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+      const list = g.results || []
+      const r = (region && list.find(x => fold(`${x.admin1} ${x.country}`).includes(fold(region)))) || list[0]
+      if (r) loc = { lat: r.latitude, lon: r.longitude, name: r.name }
+    }
+    if (!loc) {
+      const ip = await (await fetch('https://ipwho.is/', { signal: AbortSignal.timeout(10000) })).json()
+      if (ip.success && ip.latitude) loc = { lat: ip.latitude, lon: ip.longitude, name: ip.city }
+    }
+    if (!loc) return null
+    const w = await (await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${loc.lat}&longitude=${loc.lon}` +
+      '&current=temperature_2m,apparent_temperature,weather_code&timezone=auto', { signal: AbortSignal.timeout(10000) })).json()
+    const c = w.current
+    if (!c) return null
+    // Códigos WMO: llovizna 51-57, lluvia 61-67, chubascos 80-82, tormenta 95-99
+    const rain = (c.weather_code >= 51 && c.weather_code <= 67) || (c.weather_code >= 80 && c.weather_code <= 82) || c.weather_code >= 95
+    const feels = c.apparent_temperature ?? c.temperature_2m
+    const data = { city: loc.name, temp: Math.round(c.temperature_2m),
+                   kind: rain ? 'lluvia' : feels >= 30 ? 'calor' : feels <= 14 ? 'frio' : null }
+    weatherCache = { at: Date.now(), query: city, loc, data }
+    fs.writeFileSync(WEATHER_PATH, JSON.stringify(weatherCache))
+    return data
+  } catch {
+    return null
+  }
+})
 // Lo que le escribes a DJ Nat (y lo que te contesta), para después hacer frases con tu estilo
 ipcMain.on('dj-chat-log', (_, who, text) => {
   try {
