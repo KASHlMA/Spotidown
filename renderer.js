@@ -2545,18 +2545,59 @@ async function cachedGreeting() {
 // chocar con el límite de sesiones por minuto de Google
 let greetWarming = false
 // Lo que dice al instante mientras arma la respuesta (grabado una vez, como los saludos)
+// Variadas a propósito: distintos tonos (prendida, coqueta, chistosa, misteriosa, de radio)
 const DJ_ACKS = {
-  ask: ['¡Va! Déjame ver qué tienes por aquí.', '¡Sale! Ahorita te lo busco.', '¡Uy, buena! Dame un segundito.',
-        '¡Órale, va! Deja te armo algo.', '¡Claro que sí! Déjame buscarte unas buenas.', '¡A la orden! Ya te busco algo.'],
-  switch: ['¡Sale, cambiamos de rollo!', '¡Va, otra vibra!', '¡Órale, a cambiarle!', '¡Va que va, cambiamos!'],
-  next: ['¡Y seguimos con más!', '¡Esto no para!', '¡Aquí seguimos, eh!', '¡No te me vayas, que viene más!'],
+  ask: [
+    'Uy, qué buen gusto tienes. Deja te busco lo mejorcito.',
+    'Pedido recibido en cabina. Ahorita sale calientito.',
+    'Me encanta cuando me pides cosas. Dame chance.',
+    'Esa petición está de lujo. Voy por tus rolas.',
+    'Anotado, mi rey. Ya estoy revolviendo tu música.',
+    'Uff, me late. Déjame hacerte magia.',
+    'Ya dijiste. Abriendo el cajón de las joyitas.',
+    'Mira nada más qué antojo. Te lo preparo en corto.',
+    'Tú pides y la cabina obedece. Ahí voy.',
+    'Con esa petición me alegraste el día. Ya te lo armo.',
+    'Buenísima idea. Déjame buscar entre tus tesoros.',
+    'Petición aceptada. Calentando las bocinas.',
+    'Ay, tú sí sabes. Te lo pongo en caliente.',
+    'Dame tantito que te voy a lucir con esta.',
+  ],
+  switch: [
+    'Se acabó lo que se daba. Viene algo nuevo.',
+    'Cambio de aires. Agárrate que viene otro mood.',
+    'Borrón y cuenta nueva. Te tengo otra sorpresa.',
+    'Nuevo rumbo, misma energía. Vámonos.',
+    'Le damos la vuelta a la página. Escucha esto.',
+    'Plot twist en la cabina. Cambiamos de onda.',
+    'Ya estuvo de eso. Te llevo para otro lado.',
+    'Giro de volante. Agárrate bien.',
+    'Cerramos ese capítulo. Abrimos uno nuevo.',
+    'Tú mandas. Nos movemos a otra vibra.',
+  ],
+  next: [
+    'Ni se te ocurra irte, que lo bueno apenas empieza.',
+    'Aquí la cabina sigue encendida.',
+    'Esto apenas va calentando.',
+    'Sin pausa y sin prisa, seguimos sonando.',
+    'Tu DJ favorita sigue al aire.',
+    'Quédate, que todavía tengo joyitas guardadas.',
+    'Mientras tú escuches, yo sigo poniendo.',
+    'La fiesta no se detiene en esta cabina.',
+    'Vamos por la siguiente tanda.',
+    'Si te gustó lo anterior, espérate a lo que sigue.',
+  ],
 }
+let djAckLog = []   // las últimas que dijo, para no repetirlas seguido
 async function cachedAck(kind) {
   if (!dj.ai) return null
   const ready = []
   for (const t of DJ_ACKS[kind]) if (await api.djCached(t)) ready.push(t)
   if (!ready.length) return null
-  const text = ready[Math.floor(Math.random() * ready.length)]
+  const fresh = ready.filter(t => !djAckLog.includes(t))
+  const pool = fresh.length ? fresh : ready
+  const text = pool[Math.floor(Math.random() * pool.length)]
+  djAckLog = [text, ...djAckLog].slice(0, 6)
   const r = await api.djSay(text, 'gemini')   // en caché: al instante
   return r.ok ? { text, file: r.ok } : null
 }
