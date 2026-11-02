@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell, nativeImage, utilityProcess } = require('electron')
+const { app, BrowserWindow, ipcMain, shell, nativeImage, utilityProcess, session } = require('electron')
 const path = require('path')
 const fs   = require('fs')
 const createLastfm = require('./lastfm')
@@ -27,6 +27,10 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  // El reproductor incrustado de YouTube no carga sin "Referer" (la app es file://)
+  session.defaultSession.webRequest.onBeforeSendHeaders(
+    { urls: ['*://*.youtube-nocookie.com/*', '*://*.youtube.com/*'] },
+    (d, cb) => { d.requestHeaders.Referer = 'https://spotidown.local/'; cb({ requestHeaders: d.requestHeaders }) })
   createWindow()
   createShortcut()
   watchMusicDir()
@@ -257,6 +261,58 @@ ipcMain.handle('dj-say', wrap((text, engine) => engine === 'gemini' ? gemini.say
 // En vivo: el audio llega al renderer por pedazos ('dj-chunk') para que Nat hable al instante
 ipcMain.handle('dj-cached', (_, text) => gemini.cached(text))
 ipcMain.handle('dj-clean', (_, keep) => gemini.cleanup(keep))
+
+// ── IPC: video de fondo (tipo Canvas de Spotify) ─────────────────────────────
+// Se busca en YouTube leyendo la página de resultados (sin key ni límite diario). Se prefiere
+// el video oficial del artista; letras, "audio" y visualizers no (son una imagen fija).
+// Se guarda por canción: cada una se busca una sola vez.
+const YT_PATH = path.join(app.getPath('userData'), 'yt-cache.json')
+let ytCache = null
+const ytFold = s => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9ñ ]/g, ' ').replace(/\s+/g, ' ').trim()
+async function ytSearch(q) {
+  const res = await fetch('https://www.youtube.com/results?search_query=' + encodeURIComponent(q) + '&hl=es', {
+    headers: { 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36', 'accept-language': 'es-MX,es;q=0.9' },
+    signal: AbortSignal.timeout(10000),
+  })
+  const m = (await res.text()).match(/var ytInitialData = (\{.*?\});<\/script>/s)
+  if (!m) return []
+  const out = []
+  const walk = o => {
+    if (!o || typeof o !== 'object' || out.length >= 12) return
+    if (o.videoRenderer?.videoId) {
+      const v = o.videoRenderer
+      out.push({ id: v.videoId, title: (v.title?.runs || []).map(r => r.text).join(''), channel: v.ownerText?.runs?.[0]?.text || '' })
+      return
+    }
+    for (const k in o) walk(o[k])
+  }
+  walk(JSON.parse(m[1]))
+  return out
+}
+ipcMain.handle('yt-videos', async (_, artist, title, live) => {
+  const key = ytFold(artist) + '|' + ytFold(title)
+  if (!ytCache) { try { ytCache = JSON.parse(fs.readFileSync(YT_PATH, 'utf8')) } catch { ytCache = {} } }
+  const c = ytCache[key]
+  if (c && Date.now() - c.at < (c.ids.length ? 60 : 7) * 864e5) return c.ids
+  let list
+  try { list = await ytSearch(`${artist} ${title} video oficial`) } catch { return null }   // sin internet
+  const t = ytFold(title), a = ytFold(artist).split(' ')[0]
+  const scored = list.map(v => {
+    const vt = ytFold(v.title), ch = ytFold(v.channel)
+    if (!vt.includes(t.split(' ').slice(0, 3).join(' '))) return null            // otra canción
+    if (/\b(letra|lyrics?|lyric video|audio|visualizer|karaoke|cover|reaccion|reaction|8d|slowed|sped up|nightcore)\b/.test(vt)) return null
+    if (!live && /\b(en vivo|live|concierto)\b/.test(vt)) return null
+    let score = 0
+    if (/\b(video oficial|official video|official music video|videoclip|video clip)\b/.test(vt)) score += 3
+    if (a && (ch.includes(a) || /vevo/.test(ch))) score += 2
+    if (a && vt.includes(a)) score += 1
+    return { id: v.id, score }
+  }).filter(Boolean).sort((x, y) => y.score - x.score)
+  const ids = scored.filter(x => x.score >= 2).slice(0, 3).map(x => x.id)
+  ytCache[key] = { ids, at: Date.now() }
+  try { fs.writeFileSync(YT_PATH, JSON.stringify(ytCache)) } catch {}
+  return ids
+})
 
 // ── IPC: clima (Open-Meteo, gratis y sin key) para que DJ Nat lo comente ───────
 // Ubicación: la ciudad que escribiste en Ajustes o, si no, la aproximada por tu IP.

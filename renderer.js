@@ -1518,6 +1518,7 @@ function renderRight() {
     : (playContext?.title || currentSong?.album || 'Reproduciendo')
   if (rightMode === 'queue') renderQueue()
   if (rightMode === 'np') renderNpNext()
+  updateCanvas()
   if (rightMode === 'dj') renderDjPanel()
   // el panel cambia el ancho de la lista central
   scheduleRender()
@@ -1645,6 +1646,7 @@ function updateNowPlaying(song) {
   updateLikeButtons()
   updateMediaSession()
   renderNpGenres()
+  updateCanvas()
 }
 
 // Chips con los géneros de la canción actual (clic → abre el género)
@@ -1653,6 +1655,57 @@ function renderNpGenres() {
   box.innerHTML = (currentSong?.genres || [])
     .map(id => `<button class="g-chip" data-genre="${id}">${esc(GENRE_BY_ID.get(id).name)}</button>`).join('')
 }
+
+// ── Video de fondo (tipo Canvas de Spotify) ───────────────────────────────────
+// El video oficial de YouTube sin sonido, en loop, encima de la carátula. Sin internet, sin
+// video, o si el video no se deja incrustar, se queda la carátula. Sólo con el panel abierto.
+const canvasBox = $('np-canvas')
+const canvasState = { song: null, ids: [], i: 0, frame: null }
+function canvasCmd(func, args = []) {
+  canvasState.frame?.contentWindow?.postMessage(JSON.stringify({ event: 'command', func, args }), '*')
+}
+function canvasClear() {
+  canvasBox.classList.remove('on')
+  canvasState.frame?.remove()
+  canvasState.frame = null
+}
+function canvasTry() {
+  canvasClear()
+  const id = canvasState.ids[canvasState.i]
+  if (!id) return
+  const f = document.createElement('iframe')
+  f.allow = 'autoplay; encrypted-media'
+  f.src = `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&mute=1&controls=0&disablekb=1&fs=0&iv_load_policy=3` +
+    `&modestbranding=1&playsinline=1&rel=0&loop=1&playlist=${id}&start=30&enablejsapi=1`
+  f.onload = () => f.contentWindow?.postMessage(JSON.stringify({ event: 'listening', id: 1, channel: 'widget' }), '*')
+  canvasState.frame = f
+  canvasBox.appendChild(f)
+}
+async function updateCanvas() {
+  const song = currentSong
+  if (rightMode !== 'np' || !song || !navigator.onLine) { canvasState.song = null; canvasClear(); return }
+  if (canvasState.song === song) return
+  canvasState.song = song
+  canvasClear()
+  const ids = await api.ytVideos(splitArtists(song.artist)[0] || song.artist || '', cleanTitle(song.title), /en vivo|live/i.test(song.title))
+  if (canvasState.song !== song || !ids?.length) return
+  canvasState.ids = ids
+  canvasState.i = 0
+  canvasTry()
+}
+window.addEventListener('message', e => {
+  if (!canvasState.frame || e.source !== canvasState.frame.contentWindow) return
+  let m
+  try { m = typeof e.data === 'string' ? JSON.parse(e.data) : e.data } catch { return }
+  if (m.event === 'onError') { canvasState.i++; canvasTry(); return }   // no se deja incrustar: el siguiente
+  const st = m.event === 'onStateChange' ? m.info : m.info?.playerState
+  if (st === 1) {
+    canvasBox.classList.add('on')
+    if (audio.paused) canvasCmd('pauseVideo')
+  }
+})
+window.addEventListener('offline', () => { canvasState.song = null; canvasClear() })
+window.addEventListener('online', updateCanvas)
 
 function setCover(src) {
   for (const id of ['bar-cover', 'np-cover']) {
@@ -3365,7 +3418,8 @@ audio.addEventListener('play', () => {
   if (!spectrumRafId) drawSpectrum()
   if (!seekRafId)     rafLoop()
 })
-audio.addEventListener('pause', () => setPlayState(false))
+audio.addEventListener('pause', () => { setPlayState(false); canvasCmd('pauseVideo') })
+audio.addEventListener('playing', () => canvasCmd('playVideo'))
 
 // ── Media keys / control de Windows (SMTC) ────────────────────────────────────
 function updateMediaSession() {

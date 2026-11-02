@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('api', {
   djSayNow:         (text, id) => ipcRenderer.invoke('dj-say-now', text, id),
   djCached:         (text)    => ipcRenderer.invoke('dj-cached', text),
   djClean:          (keep)    => ipcRenderer.invoke('dj-clean', keep),
+  ytVideos:         (artist, title, live) => ipcRenderer.invoke('yt-videos', artist, title, live),
   djChatLog:        (who, text) => ipcRenderer.send('dj-chat-log', who, text),
   weather:          (city)    => ipcRenderer.invoke('weather', city),
   onDjChunk:        (cb)      => ipcRenderer.on('dj-chunk', (_, id, b64) => cb(id, b64)),
