@@ -350,7 +350,8 @@ const GENRES = [
   // Grabaciones en vivo: se detectan por el título o el álbum ("(En Vivo)", "Live at…"), no por Last.fm
   { id: 'envivo',     name: 'En vivo',           color: [180, 30, 60],  tags: ['en vivo', 'live recording'],
     alias: ['en vivo', 'vivo', 'live', 'concierto', 'conciertos', 'directo'] },
-  { id: 'reggaeton',  name: 'Reggaetón',         color: [220, 40, 140], tags: ['reggaeton', 'reggaetón', 'regueton', 'perreo', 'dembow', 'urbano latino', 'latin urban', 'neoperreo', 'urbano'] },
+  { id: 'reggaeton',  name: 'Reggaetón',         color: [220, 40, 140], tags: ['reggaeton', 'reggaetón', 'regueton', 'perreo', 'dembow', 'urbano latino', 'latin urban', 'neoperreo', 'urbano'],
+    alias: ['bellakeo', 'bellaqueo', 'bellaco', 'bellaca', 'bellakas', 'perrear', 'perreito'] },
   { id: 'trap-latino',name: 'Trap latino',       color: [90, 40, 160],  tags: ['latin trap', 'trap latino', 'trap en español', 'trap en espanol', 'spanish trap', 'argentine trap', 'trap argentino'] },
   { id: 'bachata',    name: 'Bachata',           color: [180, 30, 80],  tags: ['bachata'] },
   { id: 'merengue',   name: 'Merengue',          color: [240, 160, 20], tags: ['merengue'] },
@@ -1977,7 +1978,8 @@ const DJ_SYSTEM =
   'Te llamas DJ Nat. Reglas: de 1 a 2 frases y máximo 25 palabras. Se escribe "rola" (con una sola ele). ' +
   'NO te presentes ni digas tu nombre (nada de "soy DJ Nat", "aquí tu…") salvo que la tarea lo pida. NO saludes ni digas la hora o el día, salvo que la tarea lo pida. Ve directo a la música. ' +
   'Usa sólo los datos que te dan; no inventes canciones, artistas ni datos. Sin emojis, comillas, asteriscos, ' +
-  'listas ni acotaciones entre paréntesis. Háblale de tú. Varía tus frases: no empieces siempre igual.'
+  'listas ni acotaciones entre paréntesis. Háblale de tú. Varía tus frases: no empieces siempre igual. ' +
+  'Si hablas de la hora del día (mañana, tarde, noche, madrugada), usa la de momento_del_dia; nunca otra.'
 
 const DJ_TASK = {
   welcome: 'El usuario acaba de abrir la app. Salúdalo con el saludo y su nombre (si lo hay), preséntate ("soy DJ Nat"), si viene el clima coméntalo en pocas palabras, dile la hora ' +
@@ -2103,6 +2105,8 @@ function cleanLine(t) {
 
 async function djLine(kind, block) {
   const f = blockFacts(block)
+  const ph = partOfDay(new Date(Date.now() + (block.ahead || 0)).getHours())
+  f.momento_del_dia = ph === 'manana' ? 'mañana' : ph
   if (kind === 'welcome' || kind === 'welcome2') {
     // Sólo en la bienvenida: saludo según la hora, nombre y hora exacta
     const d = new Date(), h = d.getHours()
@@ -2638,7 +2642,7 @@ const REQ_SCHEMA = {
     moods:      { type: 'array', items: { type: 'string' }, description: 'ids de moods a incluir' },
     exclude:    { type: 'array', items: { type: 'string' }, description: 'ids de géneros o moods a evitar' },
     artists:    { type: 'array', items: { type: 'string' }, description: 'artistas a incluir, escritos igual que en la lista' },
-    similar_to: { type: 'string', description: 'artista o canción a la que se debe parecer, o vacío' },
+    similar_to: { type: 'array', items: { type: 'string' }, description: 'artistas o canciones a los que se debe parecer (todos los que mencione), o vacío' },
     songs:      { type: 'array', description: 'canciones específicas que pidió por su nombre, en el orden en que las pidió',
                   items: { type: 'object', properties: { title: { type: 'string' }, artist: { type: 'string' } }, required: ['title'] } },
   },
@@ -2666,12 +2670,22 @@ function findSong(title, artist = '') {
   return best
 }
 
-function catalogText() {
+function mentionedArtists(text) {
+  const f = ' ' + fold(text).replace(/[^a-z0-9ñ]+/g, ' ') + ' '
+  return getGroups().artistList.filter(a => {
+    const n = fold(a.name).replace(/[^a-z0-9ñ]+/g, ' ').trim()
+    return n.length >= 3 && a.name !== 'Artista desconocido' && f.includes(' ' + n + ' ')
+  }).map(a => a.name)
+}
+
+function catalogText(text = '') {
   const gg = getGenreGroups()
   const groups = [...gg.genres, ...gg.moods].map(g => `${g.key} (${g.name}, ${g.songs.length})`).join('; ')
   const artists = getGroups().artistList.filter(a => a.name !== 'Artista desconocido')
     .sort((a, b) => b.songs.length - a.songs.length).slice(0, 150).map(a => a.name).join(', ')
-  return `Géneros y moods disponibles (id, nombre, canciones): ${groups}\nArtistas del usuario: ${artists}`
+  const named = mentionedArtists(text)
+  return `Géneros y moods disponibles (id, nombre, canciones): ${groups}\nArtistas del usuario: ${artists}` +
+    (named.length ? `\nArtistas que mencionó (están en su biblioteca): ${named.join(', ')}` : '')
 }
 
 // Sin IA: busca géneros, moods y artistas mencionados; "sin X" excluye y "como X" busca parecidas
@@ -2684,7 +2698,7 @@ function keywordPlan(text) {
     const ft = fold(t)
     return ft.length >= 4 && new RegExp(`\\b${ft.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(seg)
   }))
-  const like = /\bcomo\s+(.+)$/.exec(main)
+  const like = /\b(?:como|tipo|estilo)\s+(?:de\s+)?(.+)$/.exec(main)
   const head = like ? main.slice(0, like.index) : main
   const inc = mentions(head)
   const artists = getGroups().artistList.filter(a => a.name.length >= 4 && fold(head).includes(fold(a.name))).map(a => a.name)
@@ -2696,7 +2710,7 @@ function keywordPlan(text) {
     moods: inc.filter(g => g.mood).map(g => g.key),
     exclude: rest.flatMap(seg => mentions(seg).map(g => g.key)),
     artists,
-    similar_to: like ? like[1].trim() : '',
+    similar_to: like && mentionedArtists(like[1]).length ? mentionedArtists(like[1]) : like ? like[1].split(/\s+(?:o|y|ó)\s+|,/).map(x => x.trim()).filter(Boolean) : [],
     // Si no nombró estilo ni artista, quizá es el nombre de una canción ("pon pollypocket")
     songs: inc.length || artists.length || like ? []
       : [{ title: head.replace(/^\s*(ponme|pon|quiero|reproduce|toca|ponte)\s+(la\s+)?(cancion|rola)?\s*(de\s+)?/, '') }],
@@ -2721,13 +2735,23 @@ async function poolFromPlan(plan) {
     const both = pool ? bySinger.filter(s => pool.has(s)) : []
     if (bySinger.length) pool = new Set(both.length >= 4 ? both : bySinger)
   }
-  if (plan.similar_to) {
-    const m2 = searchMatches(plan.similar_to)
-    const b = bestMatch(plan.similar_to, m2)
-    const seed = b?.kind === 'song' ? b.song : b?.songs ? [...b.songs].sort((x, y) => affinity(y) - affinity(x))[0] : null
-    if (seed) {
-      const sim = await similarSongs(seed)
-      const keep = pool ? sim.filter(s => pool.has(s)) : []
+  const refs = [plan.similar_to || []].flat().filter(Boolean)
+  if (refs.length) {
+    const sim = new Set(), refGenres = new Set()
+    for (const ref of refs) {
+      // Primero como artista de tu biblioteca (exacto); si no, lo que encuentre la búsqueda
+      const own = allSongs.filter(s => splitArtists(s.artist).some(a => fold(a) === fold(ref)))
+      const b = own.length ? null : bestMatch(ref, searchMatches(ref))
+      const seeds = own.length ? own : b?.kind === 'song' ? [b.song] : b?.songs ? [...b.songs] : []
+      seeds.sort((x, y) => affinity(y) - affinity(x))
+      for (const s of seeds) sim.add(s)   // sus propias rolas también van
+      for (const seed of seeds.slice(0, 2)) for (const s of await similarSongs(seed)) sim.add(s)
+      for (const x of seeds) { const g = mainGenre(x); if (g) refGenres.add(g) }
+    }
+    const sameGenre = [...sim].filter(s => refGenres.has(mainGenre(s)))
+    if (sameGenre.length >= 8) { sim.clear(); for (const s of sameGenre) sim.add(s) }
+    if (sim.size) {
+      const keep = pool ? [...sim].filter(s => pool.has(s)) : []
       pool = new Set(keep.length >= 5 ? keep : sim)
     }
   }
@@ -2748,10 +2772,10 @@ async function djAsk(text) {
     const r = await api.djThink(
       DJ_SYSTEM + ' Ahora el usuario te pide algo: elige qué poner usando SÓLO los ids y artistas de la lista y ' +
       'contéstale directo, sin saludar ni presentarte (ej. "¡Va! Unos corriditos pa la peda, cero reggaetón"). ' +
-      'Si pide algo "como", "parecido a" o "tipo" un artista o canción, pon ese nombre en similar_to y NO en artists; ' +
+      'Si pide algo "como", "parecido a", "estilo" o "tipo" uno o varios artistas o canciones, pon TODOS esos nombres en similar_to y NO en artists; ' +
       'usa artists sólo si pide escuchar a ese artista. Si pide una o varias canciones por su nombre ("pon Gil", ' +
       '"ponme pollypocket"), ponlas en songs tal cual las escribió (con su artista si lo dijo).',
-      `${catalogText()}\n\nPetición del usuario: ${text}`, REQ_SCHEMA)
+      `${catalogText(text)}\n\nPetición del usuario: ${text}`, REQ_SCHEMA)
     if (r.ok) plan = r.ok
   }
   if (!plan) plan = keywordPlan(text)
@@ -2765,6 +2789,12 @@ async function djAsk(text) {
     const line = 'Uy, no encontré nada así en tu música. ¿Me lo pides de otra forma?'
     await speakLive(line)
     return
+  }
+  // "tipo Cachirula o Emi Blue": abre una rola de cada uno (de las que más escuchas) y luego parecidas
+  for (const ref of [plan.similar_to || []].flat().filter(Boolean).slice(0, 2)) {
+    const own = pool.filter(s => !wanted.includes(s) && splitArtists(s.artist).some(a => fold(a) === fold(ref)))
+    const pick = own.sort((x, y) => affinity(y) - affinity(x))[Math.floor(Math.random() * Math.min(2, own.length))]
+    if (pick) wanted.push(pick)
   }
   const rest = pool.filter(s => !wanted.includes(s))
   const songs = [...wanted, ...buildBlock(rest, Math.max(3, 6 - wanted.length))]
