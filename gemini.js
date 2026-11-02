@@ -13,15 +13,19 @@ const TTS_MODELS = ['gemini-3.8-flash-tts', 'gemini-3.1-flash-tts-preview', 'gem
 // instrucción va aparte (nunca se lee en voz alta) y el audio llega en tiempo real.
 const LIVE_MODEL = 'gemini-2.5-flash-native-audio-latest'
 const VOICE      = 'Laomedeia'
-const LIVE_SYSTEM = 'Eres DJ Nat, una locutora de radio mexicana joven, muy expresiva, cálida, juguetona y carismática. ' +
-  'Cuando te mandan un texto, lo dices EN VOZ ALTA palabra por palabra, actuándolo de verdad: con muchas emociones, ' +
-  'sonrisas en la voz, cambios de ritmo, energía de radio y acento mexicano. Di EXACTAMENTE ese texto: no agregues, ' +
-  'quites ni cambies palabras, no comentes, y NUNCA menciones canciones, artistas ni datos que no estén en el texto.'
+// El guion va en las instrucciones y sólo se le dice "¡Al aire!": si el texto llega como
+// mensaje, la voz a veces lo toma como una petición y contesta o se brinca partes.
+const liveSystem = script => 'Eres DJ Nat, una locutora de radio mexicana joven, muy expresiva, cálida, juguetona y ' +
+  'carismática. Estás al aire. Cuando el productor diga "¡Al aire!", dices EN VOZ ALTA tu guion COMPLETO, de la primera ' +
+  'a la última palabra, actuándolo con muchas emociones, sonrisas en la voz, energía de radio y acento mexicano. ' +
+  'No agregues ni quites nada, no comentes, y NUNCA menciones canciones, artistas ni datos que no estén en el guion. ' +
+  'Tu guion es:\n' + script
+const ON_AIR = '¡Al aire!'
 const TTS_GAP_MS = 21000   // el nivel gratis de voz permite ~3 frases por minuto
 // A la voz actuada sólo se le manda el texto: cualquier instrucción de estilo la acababa
 // leyendo en voz alta a veces. La emoción sale del propio texto (¡…!, ¿a poco no?, la neta…).
 // Cambiar esta etiqueta invalida la caché de audios generados con versiones anteriores.
-const VOICE_VERSION = 'v4-oraciones'
+const VOICE_VERSION = 'v5-al-aire'
 
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 
@@ -75,11 +79,10 @@ module.exports = function createGemini(dir) {
     return j
   }
 
-  // Sesión de la API en vivo. Se abre una vez por frase y se le mandan las oraciones como
-  // turnos: Google limita cuántas sesiones se abren por minuto, no cuántos turnos.
-  // speak(texto, onChunk) se resuelve con el PCM (16 bits, 24 kHz) de ese turno; onChunk
-  // recibe cada pedazo en cuanto llega. said() es la transcripción de todo lo que dijo.
-  function openLive() {
+  // Sesión de la API en vivo para decir `script` (una por frase: Google limita cuántas se
+  // abren por minuto). speak(mensaje, onChunk) se resuelve con el PCM (16 bits, 24 kHz) de
+  // ese turno; onChunk recibe cada pedazo en cuanto llega. said() es lo que dijo de verdad.
+  function openLive(script) {
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(`${LIVE_URL}?key=${encodeURIComponent(settings.key)}`)
       let ready = false, closed = false, turn = null, said = ''
@@ -88,10 +91,11 @@ module.exports = function createGemini(dir) {
       const setupTimer = setTimeout(() => ws.terminate(), 15000)
       ws.on('open', () => ws.send(JSON.stringify({ setup: {
         model: 'models/' + LIVE_MODEL,
-        // Temperatura baja: que actúe el texto, no que improvise
-        generationConfig: { temperature: 0.3, responseModalities: ['AUDIO'],
+        // Temperatura baja y sin "pensar" antes de hablar: pensando, a veces no generaba audio
+        // o se ponía a contestar en lugar de decir el guion (y tardaba ~2 s más)
+        generationConfig: { temperature: 0.3, responseModalities: ['AUDIO'], thinkingConfig: { thinkingBudget: 0 },
                             speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICE } } } },
-        systemInstruction: { parts: [{ text: LIVE_SYSTEM }] },
+        systemInstruction: { parts: [{ text: liveSystem(script) }] },
         outputAudioTranscription: {},
       } })))
       ws.on('message', raw => {
@@ -116,7 +120,8 @@ module.exports = function createGemini(dir) {
       // Cualquier cierre inesperado se nota al instante (antes se quedaba esperando 60 s)
       ws.on('close', (code, reason) => {
         closed = true
-        const err = new Error(errOf(code, reason))
+        // detail: código y motivo de Google, para el registro
+        const err = Object.assign(new Error(errOf(code, reason)), { detail: `cierre ${code} ${String(reason).slice(0, 100)}` })
         if (!ready) { clearTimeout(setupTimer); reject(err) }
         if (turn) { const t = turn; turn = null; clearTimeout(t.timer); t.reject(Object.assign(err, { partial: t.pcm.length > 0 })) }
       })
@@ -138,9 +143,9 @@ module.exports = function createGemini(dir) {
   // Abre sesión; si Google dice que se pasó del límite por minuto, espera y reintenta
   async function openLiveRetry(text) {
     for (let attempt = 1; ; attempt++) {
-      try { return await openLive() }
+      try { return await openLive(text) }
       catch (e) {
-        log('falló', `abrir sesión (intento ${attempt}): ${e.message}`, text)
+        log('falló', `abrir sesión (intento ${attempt}): ${e.message} ${e.detail || ""}`, text)
         if (e.message === 'invalid-key' || attempt === 3) throw e
         await sleep(e.message === 'quota' ? 12000 : 1000)
       }
@@ -180,31 +185,72 @@ module.exports = function createGemini(dir) {
     return extra <= Math.max(2, got.length * 0.2) && missing <= Math.max(1, want.length * 0.25)
   }
 
-  // Una sesión por frase con el texto completo (en turnos separados la voz se pone a
-  // platicar y deja pausas). Sin streaming (frases preparadas) se repite una vez si salió
-  // distinta al texto; con streaming ya sonó, así que sólo se evita guardarla en caché.
+  // Una sesión por frase con el guion completo (en turnos separados la voz se pone a
+  // platicar y deja pausas). Si termina sin audio (~1 de cada 8) se repite hasta 3 veces:
+  // no sonó nada, así que no se nota. Sin streaming (frases preparadas) también se repite
+  // una vez si salió distinta al texto; con streaming ya sonó y sólo no se guarda en caché.
   async function liveSay(text, onChunk) {
     const tries = onChunk ? 1 : 2
     for (let attempt = 1; ; attempt++) {
       const session = await openLiveRetry(text)
       let emitted = false
       try {
-        const buf = await session.speak(text, b => { emitted = true; onChunk?.(b) })
-        if (!buf.length) throw new Error('network')
-        await sleep(700)   // la transcripción llega un poco después que el audio
-        const ok = faithful(text, session.said())
+        let buf = await session.speak(ON_AIR, b => { emitted = true; onChunk?.(b) })
+        if (!buf.length) throw Object.assign(new Error('network'), { detail: `sin audio; dijo: ${session.said()}` })
+        await sleep(1200)   // la transcripción llega un poco después que el audio
+        let said = session.said()
+        // Si cortó el final, se dice sólo lo que faltó y se encadena: la voz va ~2 s detrás
+        // de lo que llega, así que suena como una pausa natural
+        const tail = missingTail(text, said)
+        if (tail) {
+          log('completando', `faltó: ${tail}`, text)
+          const gap = Buffer.alloc(Math.round(24000 * 0.15) * 2)
+          onChunk?.(gap)
+          const s2 = await openLiveRetry(tail)
+          try {
+            const more = await s2.speak(ON_AIR, onChunk)
+            if (more.length) {
+              buf = Buffer.concat([buf, gap, more])
+              await sleep(1200)
+              said += ' ' + s2.said()
+            }
+          } finally {
+            s2.close()
+          }
+        }
+        const ok = faithful(text, said)
         if (ok || attempt >= tries) {
-          if (!ok) log('distinta', `dijo: ${session.said()}`, text)
+          if (!ok) log('distinta', `dijo: ${said}`, text)
           return { wav: pcmToWav(buf, 24000), ok }
         }
-        log('repetida', `dijo: ${session.said()}`, text)
+        log('repetida', `dijo: ${said}`, text)
       } catch (e) {
-        log('falló', `intento ${attempt}: ${e.message}`, text)
-        if (emitted || attempt >= 2 || e.message === 'invalid-key') throw Object.assign(e, { partial: emitted })
+        log('falló', `intento ${attempt}: ${e.message} ${e.detail || ""}`, text)
+        if (emitted || attempt >= 3 || e.message === 'invalid-key') throw Object.assign(e, { partial: emitted })
+        // Reintentos pegados también salían sin audio (Google satura y sólo transcribe): espera
+        await sleep(attempt * 5000)
       } finally {
         session.close()
       }
     }
+  }
+
+  // Lo que quedó sin decir al final del guion (null si lo dijo todo o falta muy poco).
+  // Las palabras se comparan en orden, así un "con" dicho antes no cuenta como el del final.
+  function missingTail(text, said) {
+    const norm = w => w.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9ñ]/g, '')
+    const got = said.split(/\s+/).map(norm).filter(Boolean)
+    const words = text.split(/\s+/).filter(Boolean)
+    let pos = 0, last = -1
+    words.forEach((w, i) => {
+      const n = norm(w)
+      if (n.length <= 2) return
+      const at = got.indexOf(n, pos)
+      if (at >= 0) { pos = at + 1; last = i }
+    })
+    if (last < 2) return null   // no empezó con el guion: no es un corte, es otra cosa
+    const tail = words.slice(last + 1)
+    return tail.filter(w => norm(w).length > 2).length >= 3 ? tail.join(' ') : null
   }
 
   async function say(text, onChunk) {
