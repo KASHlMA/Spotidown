@@ -2992,7 +2992,28 @@ async function djAsk(text) {
 }
 
 // ── Panel del DJ ──────────────────────────────────────────────────────────────
+// Orbe chiquito de la barra: estado del DJ y, mientras habla, late con su voz
+let miniRaf = 0
+function syncMiniOrb() {
+  const b = $('btn-dj')
+  b.classList.toggle('live', dj.on)
+  b.classList.toggle('thinking', dj.thinking)
+  b.classList.toggle('speaking', dj.speaking)
+  if (dj.speaking && !miniRaf) {
+    let lv = 0
+    const step = () => {
+      if (!dj.speaking) { miniRaf = 0; b.style.setProperty('--lv', 0); return }
+      const v = voiceLevel()
+      lv += (v - lv) * (v > lv ? 0.5 : 0.15)
+      b.style.setProperty('--lv', lv.toFixed(3))
+      miniRaf = requestAnimationFrame(step)
+    }
+    miniRaf = requestAnimationFrame(step)
+  }
+}
+
 function renderDjPanel() {
+  queueMicrotask(syncMiniOrb)
   if (rightMode !== 'dj') return
   queueMicrotask(startOrb)   // al arrancar la app el orbe todavía no existe
   $('dj-orb').classList.toggle('speaking', dj.speaking)

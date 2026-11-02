@@ -231,7 +231,31 @@ img { display: block; }
 /* ── DJ ── */
 .tile-dj { background: radial-gradient(circle at 30% 30%, #ff8a6b, #e8333c 55%, #4a0710) !important; color: #fff !important; }
 .tile-dj span { font-weight: 900; font-size: 20px; letter-spacing: -.5px; }
-.bar-dj { width: auto; padding: 0 6px; font-size: 12px; font-weight: 900; letter-spacing: .5px; }
+/* Botón del DJ en la barra: el orbe de Nat en chiquito. Respira en reposo, gira cuando piensa
+   y late con su voz cuando habla (--lv lo pone el renderer con el volumen de la voz) */
+.bar-dj { width: 32px; }
+.mini-orb {
+  position: relative; width: 22px; height: 22px; display: block; opacity: .8;
+  transform: scale(calc(1 + var(--lv, 0) * .4)); transition: opacity .2s, transform .08s;
+}
+.bar-dj:hover .mini-orb, .bar-dj.active .mini-orb, .bar-dj.live .mini-orb { opacity: 1; }
+.mini-orb i {
+  position: absolute; inset: 0; mix-blend-mode: screen;
+  border-radius: 46% 54% 52% 48% / 55% 45% 55% 45%;
+  animation: mo-spin 7s linear infinite, mo-morph 4s ease-in-out infinite alternate;
+}
+.mini-orb i:nth-child(1) { background: radial-gradient(circle at 35% 35%, #ff5a4f, #c4101f 75%); }
+.mini-orb i:nth-child(2) { inset: 2px; background: radial-gradient(circle at 60% 40%, #ff2f6a, #8a0a2a 80%); animation-duration: 9s, 3.2s; animation-direction: reverse, alternate; }
+.mini-orb i:nth-child(3) { inset: 6px; background: radial-gradient(circle, #ffd0a0, #ff8a3c 60%, #e8333c00); animation-duration: 5s, 2.6s; }
+.bar-dj.thinking .mini-orb i { animation-duration: 1.6s, 1.2s; }
+.bar-dj.speaking .mini-orb i { animation-duration: 2.4s, .9s; }
+.bar-dj.live .mini-orb { filter: drop-shadow(0 0 4px rgba(232, 51, 60, .7)); }
+@keyframes mo-spin { to { transform: rotate(360deg); } }
+@keyframes mo-morph {
+  0%   { border-radius: 46% 54% 52% 48% / 55% 45% 55% 45%; }
+  50%  { border-radius: 58% 42% 40% 60% / 42% 58% 44% 56%; }
+  100% { border-radius: 40% 60% 58% 42% / 50% 50% 60% 40%; }
+}
 
 .dj-body { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 12px; }
 .dj-hero { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 8px 0 16px; flex-shrink: 0; }
