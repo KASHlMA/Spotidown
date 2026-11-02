@@ -2025,6 +2025,84 @@ function speak(text, file, onNearEnd) {
   })
 }
 
+// ── Voz en streaming: los pedazos de PCM (16 bits, 24 kHz) se van encolando en Web Audio
+// en cuanto llegan, así Nat empieza a hablar ~4 s después en lugar de esperar todo el audio.
+const voiceOut = audioCtx.createGain()   // la voz no pasa por el volumen/analizador de la música
+voiceOut.connect(audioCtx.destination)
+const voiceStreams = new Map()
+let streamSeq = 0
+let activeStream = null
+api.onDjChunk((id, b64) => voiceStreams.get(id)?.(b64))
+
+function streamVoice(id, { onFirst, onNearEnd }) {
+  let next = 0, playing = 0, ended = false, near = false, resolveDone
+  const sources = []
+  const done = new Promise(r => { resolveDone = r })
+  const check = () => {
+    if (ended && !near && next - audioCtx.currentTime <= 1.5) { near = true; onNearEnd?.() }
+    if (ended && playing === 0) resolveDone()
+  }
+  const timer = setInterval(check, 100)
+  voiceStreams.set(id, b64 => {
+    const bin = atob(b64), n = bin.length >> 1
+    if (!n) return
+    const buf = audioCtx.createBuffer(1, n, 24000), ch = buf.getChannelData(0)
+    for (let i = 0; i < n; i++) {
+      let v = bin.charCodeAt(2 * i) | (bin.charCodeAt(2 * i + 1) << 8)
+      if (v >= 32768) v -= 65536
+      ch[i] = v / 32768
+    }
+    if (!next) { if (audioCtx.state === 'suspended') audioCtx.resume(); onFirst?.() }
+    const src = audioCtx.createBufferSource()
+    src.buffer = buf
+    src.connect(voiceOut)
+    // Colchón de 0.3 s al inicio por si algún pedazo llega tarde
+    const t = Math.max(next, audioCtx.currentTime + (next ? 0.02 : 0.3))
+    src.start(t)
+    next = t + buf.duration
+    playing++
+    sources.push(src)
+    src.onended = () => { playing--; check() }
+  })
+  const stop = () => { clearInterval(timer); voiceStreams.delete(id) }
+  return {
+    started: () => next > 0,
+    end: () => { ended = true; check(); return done.finally(stop) },
+    cancel: () => { for (const s of sources) try { s.stop() } catch {} ; stop(); resolveDone() },
+  }
+}
+
+// Dice `text` con la voz de Gemini en streaming; si no hay Gemini o falla antes de sonar,
+// cae a speak() con el archivo que haya (actuada / Dalia / voz de Windows).
+async function speakLive(text, onNearEnd) {
+  if (!dj.ai || Date.now() < dj.ttsOffUntil) return speak(text, await djVoice(text), onNearEnd)
+  const id = ++streamSeq
+  let near = false
+  const nearEnd = () => { if (!near) { near = true; onNearEnd?.() } }
+  const player = streamVoice(id, {
+    onFirst: () => { dj.thinking = false; dj.speaking = true; duck(true); renderDjPanel() },
+    onNearEnd: nearEnd,
+  })
+  activeStream = player
+  const r = await api.djSay(text, 'gemini', id)
+  if (activeStream !== player) return   // se detuvo el DJ mientras hablaba
+  activeStream = null
+  if (player.started()) {
+    await player.end()
+  } else {
+    player.cancel()
+    // Sin pedazos: vino de la caché o de la voz de respaldo (o falló todo)
+    if (!r.ok && r.error === 'quota') dj.ttsOffUntil = Date.now() + 60 * 60 * 1000
+    const file = r.ok || (await api.djSay(text, 'dalia')).ok || null
+    dj.thinking = false
+    return speak(text, file, onNearEnd)
+  }
+  nearEnd()
+  dj.speaking = false
+  duck(false)
+  renderDjPanel()
+}
+
 function djSay(text) { dj.log.push({ who: 'dj', text }); dj.log = dj.log.slice(-30); renderDjPanel() }
 
 // Pone un bloque como en la radio: primero habla Nat (lo que ya sonaba sigue mientras
@@ -2034,12 +2112,11 @@ async function djPlay(block, prepared) {
   dj.vibe = block.vibe
   dj.recent = [block.vibe.key, ...dj.recent.filter(k => k !== block.vibe.key)].slice(0, 3)
   dj.next = null
-  dj.thinking = !(prepared && 'file' in prepared)
+  const ready = prepared && 'file' in prepared
+  dj.thinking = !ready
   renderDjPanel()
   const line = prepared?.line ?? await djLine(block.kind, block)
-  const file = prepared && 'file' in prepared ? prepared.file : await djVoice(line)
-  dj.thinking = false
-  if (!dj.on) { renderDjPanel(); return }
+  if (!dj.on) { dj.thinking = false; renderDjPanel(); return }
   djSay(line)
   let started = false
   const startMusic = () => {
@@ -2047,7 +2124,9 @@ async function djPlay(block, prepared) {
     started = true
     playList(block.songs, 0, DJ_CTX)   // entra bajita (la voz la tiene agachada) y sube al terminar
   }
-  await speak(line, file, startMusic)
+  // Si ya estaba preparada (siguiente bloque) suena de inmediato; si no, en streaming
+  if (ready) { dj.thinking = false; await speak(line, prepared.file, startMusic) }
+  else await speakLive(line, startMusic)
   startMusic()
 }
 
@@ -2077,6 +2156,9 @@ function djStop() {
   dj.vibe = null
   djAudio.pause()
   if ('speechSynthesis' in window) speechSynthesis.cancel()
+  activeStream?.cancel()
+  activeStream = null
+  dj.speaking = dj.thinking = false
   duck(false)
   renderDjPanel()
 }

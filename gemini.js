@@ -9,11 +9,13 @@ const TEXT_MODEL = 'gemini-flash-lite-latest'
 // Modelos de voz "actuada" (la que suena expresiva). En el nivel gratis cada uno da
 // 10 frases al día y ~3 por minuto, con cuota separada: rotándolos son ~40 al día.
 const TTS_MODELS = ['gemini-3.8-flash-tts', 'gemini-3.1-flash-tts-preview', 'gemini-2.5-flash-preview-tts', 'gemini-3.8-flash-lite-tts']
-const LIVE_MODEL = 'gemini-3.8-live'        // sin límite diario pero más plana: sólo de respaldo
+// Voz principal: audio nativo por la API en vivo. Sin límite diario en el nivel gratis, la
+// instrucción va aparte (nunca se lee en voz alta) y el audio llega en tiempo real.
+const LIVE_MODEL = 'gemini-2.5-flash-native-audio-latest'
 const VOICE      = 'Laomedeia'
-const LIVE_SYSTEM = 'Eres una locutora de radio mexicana joven, cálida y carismática. Tu único trabajo es decir EN VOZ ALTA, ' +
-  'palabra por palabra, el texto que te mandan, actuándolo con emoción, sonrisas en la voz, pausas naturales y acento ' +
-  'mexicano relajado. No agregues, quites ni cambies nada. No respondas ni comentes: sólo dilo.'
+const LIVE_SYSTEM = 'Eres DJ Nat, una locutora de radio mexicana joven, muy expresiva, cálida, juguetona y carismática. ' +
+  'Cuando te mandan un texto, lo dices EN VOZ ALTA palabra por palabra, actuándolo de verdad: con muchas emociones, ' +
+  'sonrisas en la voz, cambios de ritmo, energía de radio y acento mexicano. No agregues ni cambies nada, no comentes: sólo actúalo.'
 const TTS_GAP_MS = 21000   // el nivel gratis de voz permite ~3 frases por minuto
 // A la voz actuada sólo se le manda el texto: cualquier instrucción de estilo la acababa
 // leyendo en voz alta a veces. La emoción sale del propio texto (¡…!, ¿a poco no?, la neta…).
@@ -62,12 +64,14 @@ module.exports = function createGemini(dir) {
     return j
   }
 
-  // Voz por la API en vivo: se abre una sesión, se manda el texto y se junta el audio que regresa
-  function liveSpeak(text) {
+  // Voz por la API en vivo: se abre una sesión, se manda el texto y se junta el audio que
+  // regresa. onChunk recibe cada pedazo (PCM 16 bits, 24 kHz) en cuanto llega.
+  function liveSpeak(text, onChunk) {
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(`${LIVE_URL}?key=${encodeURIComponent(settings.key)}`)
       const pcm = []
-      const fail = err => { clearTimeout(timer); try { ws.terminate() } catch {} reject(new Error(err)) }
+      // partial: ya se mandó audio a reproducir, así que no se puede cambiar a otra voz
+      const fail = err => { clearTimeout(timer); try { ws.terminate() } catch {} reject(Object.assign(new Error(err), { partial: pcm.length > 0 })) }
       const timer = setTimeout(() => fail('network'), 60000)
       ws.on('open', () => ws.send(JSON.stringify({ setup: {
         model: 'models/' + LIVE_MODEL,
@@ -81,7 +85,12 @@ module.exports = function createGemini(dir) {
           ws.send(JSON.stringify({ clientContent: { turns: [{ role: 'user', parts: [{ text }] }], turnComplete: true } }))
           return
         }
-        for (const p of m.serverContent?.modelTurn?.parts || []) if (p.inlineData) pcm.push(Buffer.from(p.inlineData.data, 'base64'))
+        for (const p of m.serverContent?.modelTurn?.parts || []) {
+          if (!p.inlineData) continue
+          const buf = Buffer.from(p.inlineData.data, 'base64')
+          pcm.push(buf)
+          onChunk?.(buf)
+        }
         if (m.serverContent?.turnComplete) {
           clearTimeout(timer)
           ws.close()
@@ -110,15 +119,27 @@ module.exports = function createGemini(dir) {
   }
 
   // Frase → archivo de audio. Se guarda en caché: lo que ya se dijo una vez no gasta otra vez.
-  // Primero la voz actuada rotando modelos; cuando se acaban las del día, la API en vivo.
-  function say(text) {
+  // Primero la voz nativa en vivo (sin límite; si hay onChunk se va reproduciendo mientras
+  // llega). Si falla antes de mandar audio, la voz actuada (10 al día por modelo).
+  async function say(text, onChunk) {
     const file = path.join(VOICE_DIR, crypto.createHash('sha1').update(VOICE + VOICE_VERSION + text).digest('hex') + '.wav')
-    if (fs.existsSync(file)) return Promise.resolve(file)
+    if (fs.existsSync(file)) return file
+    try {
+      const wav = await liveSpeak(text, onChunk)
+      fs.mkdirSync(VOICE_DIR, { recursive: true })
+      fs.writeFileSync(file, wav)
+      return file
+    } catch (e) {
+      if (e.partial || e.message === 'invalid-key') throw e
+    }
+    return ttsFallback(text, file)
+  }
+
+  function ttsFallback(text, file) {
     const run = ttsChain.then(async () => {
       if (fs.existsSync(file)) return file
       let wav = null
       const day = quotaDay()
-      // El modelo disponible que menos tenga que esperar por el límite por minuto
       // Siempre el primer modelo disponible (cada uno hace la voz un poco distinta): sólo se
       // pasa al siguiente cuando se acaba su cuota del día. Un intento extra si leyó de más.
       let misreads = 0
@@ -135,7 +156,7 @@ module.exports = function createGemini(dir) {
         }
         if (wav || misreads >= 3) break
       }
-      if (!wav) wav = await liveSpeak(text)
+      if (!wav) throw new Error('quota')
       fs.mkdirSync(VOICE_DIR, { recursive: true })
       fs.writeFileSync(file, wav)
       return file
