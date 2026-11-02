@@ -256,6 +256,13 @@ ipcMain.handle('gemini-set-key', (_, key) => gemini.setKey(key))
 ipcMain.handle('dj-say', wrap((text, engine) => engine === 'gemini' ? gemini.say(text) : voice.say(text)))
 // En vivo: el audio llega al renderer por pedazos ('dj-chunk') para que Nat hable al instante
 ipcMain.handle('dj-cached', (_, text) => gemini.cached(text))
+// Lo que le escribes a DJ Nat (y lo que te contesta), para después hacer frases con tu estilo
+ipcMain.on('dj-chat-log', (_, who, text) => {
+  try {
+    fs.appendFileSync(path.join(app.getPath('userData'), 'dj-chat.log'),
+      `${new Date().toLocaleString('es-MX')}\t${who}\t${String(text).replace(/\s+/g, ' ')}\n`)
+  } catch {}
+})
 ipcMain.handle('dj-say-now', async (e, text, id) => {
   try {
     return { ok: await gemini.sayNow(text, buf => { if (!e.sender.isDestroyed()) e.sender.send('dj-chunk', id, buf.toString('base64')) }) }

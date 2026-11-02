@@ -1939,12 +1939,12 @@ const DJ_SYSTEM =
   'listas ni acotaciones entre paréntesis. Háblale de tú. Varía tus frases: no empieces siempre igual.'
 
 const DJ_TASK = {
-  welcome: 'El usuario acaba de abrir la app. Salúdalo con el saludo y su nombre (si lo hay), preséntate ("soy DJ Nat"), dile la hora en palabras ' +
-           '(ej. "son las once y media"), y dile que empiezan con una playlist que le hiciste, mencionando la vibra y la ' +
-           'primera rola. Máximo 30 palabras.',
-  welcome2: 'Ya lo saludaste hace un segundo: NO vuelvas a saludar ni a presentarte. Dile la hora en palabras ' +
-            '(ej. "son las once y media") y que empiezan con una playlist que le hiciste, mencionando la vibra y la ' +
-            'primera rola. Máximo 25 palabras.',
+  welcome: 'El usuario acaba de abrir la app. Salúdalo con el saludo y su nombre (si lo hay), preséntate ("soy DJ Nat"), dile la hora ' +
+           'tal cual viene en los datos (con números, ej. "son las 11:30 p. m."), y dile que empiezan con una playlist que ' +
+           'le hiciste, mencionando la vibra y la primera rola. Si es de madrugada, puedes comentarlo. Máximo 30 palabras.',
+  welcome2: 'Ya lo saludaste hace un segundo: NO vuelvas a saludar ni a presentarte. Dile la hora tal cual viene en los ' +
+            'datos (con números, ej. "son las 11:30 p. m.") y que empiezan con una playlist que le hiciste, mencionando la ' +
+            'vibra y la primera rola. Máximo 25 palabras.',
   intro:   'Es la primera canción de la sesión: un saludo muy corto (dos o tres palabras) y presenta el bloque.',
   next:    'Haz la transición al siguiente bloque como en la radio, sin saludar.',
   continue: 'Siguen con la misma vibra de antes: haz la transición diciendo que continúan con ese mood o estilo ' +
@@ -1992,7 +1992,9 @@ async function djLine(kind, block) {
   if (kind === 'welcome' || kind === 'welcome2') {
     // Sólo en la bienvenida: saludo según la hora, nombre y hora exacta
     const d = new Date(), h = d.getHours()
-    f.saludo = h >= 5 && h < 12 ? 'Buenos días' : h >= 12 && h < 19 ? 'Buenas tardes' : 'Buenas noches'
+    // De 12 a 6 am no es "buenas noches": es madrugada
+    f.saludo = h < 6 ? 'Qué onda' : h < 12 ? 'Buenos días' : h < 19 ? 'Buenas tardes' : 'Buenas noches'
+    f.momento = partOfDay(h) === 'manana' ? 'mañana' : partOfDay(h)
     f.nombre = userName || undefined
     f.hora = d.toLocaleTimeString('es-MX', { hour: 'numeric', minute: '2-digit', hour12: true })
     f.dia = DAYS[d.getDay()]
@@ -2004,7 +2006,7 @@ async function djLine(kind, block) {
   if (transition && dj.sinceHello >= 2) {
     f.nombre = userName || undefined
     f.hora = new Date().toLocaleTimeString('es-MX', { hour: 'numeric', minute: '2-digit', hour12: true })
-    task += ' Esta vez, de forma natural, dile su nombre (si lo hay) y la hora en palabras.'
+    task += ' Esta vez, de forma natural, dile su nombre (si lo hay) y la hora tal cual viene en los datos (con números).'
     block.timed = Date.now()
   } else if (transition) {
     // De vez en cuando, algo personal o el día, para que no suene siempre igual
@@ -2176,7 +2178,7 @@ async function speakLive(text, onNearEnd, after) {
   return speak(text, file, onNearEnd)
 }
 
-function djSay(text) { dj.log.push({ who: 'dj', text }); dj.log = dj.log.slice(-30); renderDjPanel() }
+function djSay(text) { dj.log.push({ who: 'dj', text }); dj.log = dj.log.slice(-30); api.djChatLog('Nat', text); renderDjPanel() }
 
 // Pone un bloque como en la radio: primero habla Nat (lo que ya sonaba sigue mientras
 // prepara qué decir) y cuando está por terminar entra la primera canción desde abajo.
@@ -2534,6 +2536,7 @@ async function djAsk(text) {
   text = text.trim()
   if (!text) return
   dj.log.push({ who: 'yo', text })
+  api.djChatLog('Tú', text)
   dj.thinking = true
   renderDjPanel()
   let plan = null
