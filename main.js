@@ -255,6 +255,7 @@ ipcMain.handle('gemini-set-key', (_, key) => gemini.setKey(key))
 // engine: 'gemini' (Laomedeia, verificada antes de entregarla) o 'dalia' (Edge, sin límite)
 ipcMain.handle('dj-say', wrap((text, engine) => engine === 'gemini' ? gemini.say(text) : voice.say(text)))
 // En vivo: el audio llega al renderer por pedazos ('dj-chunk') para que Nat hable al instante
+ipcMain.handle('dj-cached', (_, text) => gemini.cached(text))
 ipcMain.handle('dj-say-now', async (e, text, id) => {
   try {
     return { ok: await gemini.sayNow(text, buf => { if (!e.sender.isDestroyed()) e.sender.send('dj-chunk', id, buf.toString('base64')) }) }

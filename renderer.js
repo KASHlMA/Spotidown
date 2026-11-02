@@ -1942,6 +1942,9 @@ const DJ_TASK = {
   welcome: 'El usuario acaba de abrir la app. Salúdalo con el saludo y su nombre (si lo hay), preséntate ("soy DJ Nat"), dile la hora en palabras ' +
            '(ej. "son las once y media"), y dile que empiezan con una playlist que le hiciste, mencionando la vibra y la ' +
            'primera rola. Máximo 30 palabras.',
+  welcome2: 'Ya lo saludaste hace un segundo: NO vuelvas a saludar ni a presentarte. Dile la hora en palabras ' +
+            '(ej. "son las once y media") y que empiezan con una playlist que le hiciste, mencionando la vibra y la ' +
+            'primera rola. Máximo 25 palabras.',
   intro:   'Es la primera canción de la sesión: un saludo muy corto (dos o tres palabras) y presenta el bloque.',
   next:    'Haz la transición al siguiente bloque como en la radio, sin saludar.',
   continue: 'Siguen con la misma vibra de antes: haz la transición diciendo que continúan con ese mood o estilo ' +
@@ -1951,6 +1954,7 @@ const DJ_TASK = {
 }
 
 const DJ_TEMPLATES = {
+  welcome2: ['Son las {hora}. Empecemos con una playlist que te hice: {vibra}, y abre {artista}.'],
   welcome: [
     '{saludo}{nombre}. Soy DJ Nat y son las {hora}. Empecemos con una playlist que te hice: {vibra}, y abre {artista}.',
   ],
@@ -1985,7 +1989,7 @@ function cleanLine(t) {
 
 async function djLine(kind, block) {
   const f = blockFacts(block)
-  if (kind === 'welcome') {
+  if (kind === 'welcome' || kind === 'welcome2') {
     // Sólo en la bienvenida: saludo según la hora, nombre y hora exacta
     const d = new Date(), h = d.getHours()
     f.saludo = h >= 5 && h < 12 ? 'Buenos días' : h >= 12 && h < 19 ? 'Buenas tardes' : 'Buenas noches'
@@ -2089,16 +2093,18 @@ let streamSeq = 0
 let activeStream = null
 api.onDjChunk((id, b64) => voiceStreams.get(id)?.(b64))
 
-function streamVoice(id, { onFirst, onNearEnd }) {
+function streamVoice(id, { onFirst, onNearEnd, after }) {
   let next = 0, playing = 0, ended = false, near = false, resolveDone
-  const sources = []
+  let gateOpen = !after
+  const sources = [], pending = []
   const done = new Promise(r => { resolveDone = r })
   const check = () => {
+    if (!gateOpen) return
     if (ended && !near && next - audioCtx.currentTime <= 1.5) { near = true; onNearEnd?.() }
     if (ended && playing === 0) resolveDone()
   }
   const timer = setInterval(check, 100)
-  voiceStreams.set(id, b64 => {
+  const schedule = b64 => {
     const bin = atob(b64), n = bin.length >> 1
     if (!n) return
     const buf = audioCtx.createBuffer(1, n, 24000), ch = buf.getChannelData(0)
@@ -2118,19 +2124,22 @@ function streamVoice(id, { onFirst, onNearEnd }) {
     playing++
     sources.push(src)
     src.onended = () => { playing--; check() }
-  })
+  }
+  // after: lo que está sonando antes (el saludo grabado); mientras, los pedazos se guardan
+  if (after) after.then(() => { gateOpen = true; for (const b of pending.splice(0)) schedule(b); check() })
+  voiceStreams.set(id, b64 => gateOpen ? schedule(b64) : pending.push(b64))
   const stop = () => { clearInterval(timer); voiceStreams.delete(id) }
   return {
-    started: () => next > 0,
+    started: () => next > 0 || pending.length > 0,
     end: () => { ended = true; check(); return done.finally(stop) },
-    cancel: () => { for (const s of sources) try { s.stop() } catch {} ; stop(); resolveDone() },
+    cancel: () => { pending.length = 0; for (const s of sources) try { s.stop() } catch {} ; stop(); resolveDone() },
   }
 }
 
 // Dice `text` al instante con la voz de Nat (en vivo). Dalia se genera en paralelo: si Google
 // no manda audio, entra ella sin otra espera. Sin Gemini, directo a la voz de respaldo.
-async function speakLive(text, onNearEnd) {
-  if (!dj.ai) return speak(text, await djVoice(text), onNearEnd)
+async function speakLive(text, onNearEnd, after) {
+  if (!dj.ai) { const file = await djVoice(text); await after; return speak(text, file, onNearEnd) }
   const dalia = api.djSay(text, 'dalia')
   const id = ++streamSeq
   let near = false
@@ -2138,6 +2147,7 @@ async function speakLive(text, onNearEnd) {
   const player = streamVoice(id, {
     onFirst: () => { dj.thinking = false; dj.speaking = true; duck(true); djSay(text) },
     onNearEnd: nearEnd,
+    after,
   })
   activeStream = player
   const t0 = Date.now()
@@ -2159,16 +2169,19 @@ async function speakLive(text, onNearEnd) {
     return
   }
   player.cancel()
-  dj.thinking = false
   // No sonó nada: estaba en caché (archivo) o Google no mandó audio (Dalia ya está lista)
-  return speak(text, r.ok?.file || (await dalia).ok || null, onNearEnd)
+  const file = r.ok?.file || (await dalia).ok || null
+  await after
+  dj.thinking = false
+  return speak(text, file, onNearEnd)
 }
 
 function djSay(text) { dj.log.push({ who: 'dj', text }); dj.log = dj.log.slice(-30); renderDjPanel() }
 
 // Pone un bloque como en la radio: primero habla Nat (lo que ya sonaba sigue mientras
 // prepara qué decir) y cuando está por terminar entra la primera canción desde abajo.
-async function djPlay(block, prepared) {
+// after: algo que está sonando antes (el saludo grabado); la frase entra al terminar
+async function djPlay(block, prepared, after) {
   dj.on = true
   dj.sameVibe = dj.vibe?.key === block.vibe.key ? dj.sameVibe + 1 : 0
   for (const s of block.songs) dj.used.add(s.path)
@@ -2188,8 +2201,8 @@ async function djPlay(block, prepared) {
     playList(block.songs, 0, DJ_CTX)   // entra bajita (la voz la tiene agachada) y sube al terminar
   }
   // Preparada (siguiente bloque): suena de inmediato. Si no, en vivo.
-  if (ready) { dj.thinking = false; await speak(line, prepared.file, startMusic) }
-  else await speakLive(line, startMusic)
+  if (ready) { await after; dj.thinking = false; await speak(line, prepared.file, startMusic) }
+  else await speakLive(line, startMusic, after)
   startMusic()
   prepareAlt()
 }
@@ -2237,11 +2250,57 @@ async function djStart() {
   welcomed = true
   const ready = kind === 'welcome' && welcomeReady && Date.now() - welcomeReady.at < 10 * 60 * 1000 ? welcomeReady : null
   welcomeReady = null
-  const block = ready?.block || startBlock(kind)
+  // Si el saludo completo no alcanzó a grabarse, suena al instante uno de los guardados y lo
+  // demás (la hora y la playlist) se prepara en vivo mientras lo dice
+  const greet = kind === 'welcome' && !ready ? await cachedGreeting() : null
+  const block = ready?.block || startBlock(greet ? 'welcome2' : kind)
   if (!block) { djSay('Todavía estoy conociendo tu música. Dame un ratito a que termine de clasificarla.'); return }
   save('djLastStart', block.vibe.key.split('+')[0])
   if (rightMode !== 'dj') setRight('dj')
-  await djPlay(block, ready && { line: ready.line, file: ready.file })
+  const after = greet ? speak(greet.text, greet.file) : undefined
+  await djPlay(block, ready && { line: ready.line, file: ready.file }, after)
+}
+
+// ── Saludos ya grabados ───────────────────────────────────────────────────────
+// Se graban con calma (y revisados) mientras usas la app y se guardan para siempre, así al
+// iniciar a DJ Nat siempre hay uno listo para sonar al instante, aunque acabes de abrir la app.
+const GREETINGS = {
+  madrugada: ['¡Qué onda, {n}! Aquí DJ Nat, desvelándome contigo.', '¡Buenas noches, {n}! Soy DJ Nat, ¿otra vez desvelándonos?'],
+  manana:    ['¡Buenos días, {n}! Soy DJ Nat, ¿cómo amaneciste?', '¡Buen día, {n}! Aquí DJ Nat, lista pa arrancar contigo.'],
+  tarde:     ['¡Buenas tardes, {n}! Soy DJ Nat, qué gusto tenerte de vuelta.', '¡Qué onda, {n}! Aquí DJ Nat, ¿cómo va esa tarde?'],
+  noche:     ['¡Buenas noches, {n}! Soy DJ Nat, qué bueno que llegaste.', '¡Qué onda, {n}! Aquí DJ Nat pa acompañarte esta noche.'],
+}
+const partOfDay = (h = new Date().getHours()) => h < 6 ? 'madrugada' : h < 12 ? 'manana' : h < 19 ? 'tarde' : 'noche'
+const greetingText = t => userName ? t.replace('{n}', userName) : t.replace(', {n}', '')
+
+async function cachedGreeting() {
+  if (!dj.ai) return null
+  const ready = []
+  for (const t of GREETINGS[partOfDay()].map(greetingText)) if (await api.djCached(t)) ready.push(t)
+  if (!ready.length) return null
+  const text = ready[Math.floor(Math.random() * ready.length)]
+  const r = await api.djSay(text, 'gemini')   // en caché: al instante
+  return r.ok ? { text, file: r.ok } : null
+}
+
+// Graba los que falten, empezando por los de este momento del día, espaciados para no
+// chocar con el límite de sesiones por minuto de Google
+let greetWarming = false
+async function warmGreetings() {
+  if (greetWarming || !dj.ai) return
+  greetWarming = true
+  try {
+    const now = partOfDay()
+    for (const p of [now, ...Object.keys(GREETINGS).filter(k => k !== now)]) {
+      for (const t of GREETINGS[p].map(greetingText)) {
+        if (await api.djCached(t)) continue
+        await api.djSay(t, 'gemini')
+        await new Promise(r => setTimeout(r, 30000))
+      }
+    }
+  } finally {
+    greetWarming = false
+  }
 }
 
 // El saludo se graba en segundo plano al abrir la app (con calma y verificado), así al
@@ -2258,7 +2317,10 @@ function prepareWelcome() {
     const line = await djLine('welcome', block)
     const r = await api.djSay(line, 'gemini')
     if (r.ok && !welcomed) welcomeReady = { block, line, file: r.ok, at: Date.now() }
-  })().finally(() => { welcomePrep = null })
+  })().finally(() => {
+    welcomePrep = null
+    setTimeout(warmGreetings, 30000)
+  })
 }
 
 // "Cambiar vibra" preparado de antemano: mientras suena la música, Nat ya tiene grabada la

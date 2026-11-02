@@ -346,6 +346,7 @@ module.exports = function createGemini(dir) {
     },
 
     say, sayNow, think,
+    cached: text => fs.existsSync(fileFor(text)),   // ¿esta frase ya está grabada?
   }
 }
 

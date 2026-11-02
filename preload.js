@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('api', {
   geminiSetKey:     (key)     => ipcRenderer.invoke('gemini-set-key', key),
   djSay:            (text, engine) => ipcRenderer.invoke('dj-say', text, engine),
   djSayNow:         (text, id) => ipcRenderer.invoke('dj-say-now', text, id),
+  djCached:         (text)    => ipcRenderer.invoke('dj-cached', text),
   onDjChunk:        (cb)      => ipcRenderer.on('dj-chunk', (_, id, b64) => cb(id, b64)),
   djThink:          (sys, prompt, schema) => ipcRenderer.invoke('dj-think', sys, prompt, schema),
   audioCached:      ()        => ipcRenderer.invoke('audio-cached'),
