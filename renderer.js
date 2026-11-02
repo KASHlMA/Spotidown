@@ -1876,6 +1876,19 @@ const mainGenre = s => (s.genres || []).find(id => !GENRE_BY_ID.get(id)?.mood)
 // 5–6 canciones: lo que más te late de ese pool, alguna olvidada, máximo 2 por artista.
 // genre: si la vibra es un género, las que son de otro género principal pesan poco, máximo
 // 1 por bloque y nunca abren (si no, la cumbia que más escuchas abría casi cualquier vibra)
+// Lo que el DJ ya puso y cuándo (path → fecha): lo de los últimos días casi no se repite
+let djSeen = load('djSeen', {})
+function markDjSeen(songs) {
+  const now = Date.now(), limit = now - 14 * 864e5
+  for (const s of songs) djSeen[s.path] = now
+  for (const p in djSeen) if (djSeen[p] < limit) delete djSeen[p]
+  save('djSeen', djSeen)
+}
+function seenFactor(s) {
+  const age = Date.now() - (djSeen[s.path] || 0)
+  return age < 3 * 864e5 ? 0.06 : age < 7 * 864e5 ? 0.35 : 1
+}
+
 function buildBlock(pool, n = 5, genre = null) {
   const t = Date.now() - 3 * 36e5
   const recent = new Set(playLog.filter(([, ts]) => ts > t).map(([p]) => p))
@@ -1888,9 +1901,18 @@ function buildBlock(pool, n = 5, genre = null) {
   // Si el pool es de pocos artistas (p. ej. "pon a Kevin Kaarl") se permiten más por artista
   const artists = new Set(cands.map(s => splitArtists(s.artist)[0] || ''))
   const cap = Math.max(2, Math.ceil(n / artists.size))
+  // 1–2 por bloque que nunca has escuchado (o casi), para descubrir lo que tienes guardado
+  const fresh = cands.filter(x => !plays[x.path] && pure(x) && seenFactor(x) === 1)
+  let wantFresh = Math.min(fresh.length, n >= 5 ? 2 : 1)
   while (out.length < n && cands.length) {
-    const s = weightedPick(cands, x => (1 + 2 * Math.log1p(affinity(x)) + (likedPaths.has(x.path) ? 1 : 0) + (forgotten(x) ? 2 : 0)) *
-      (pure(x) ? 1 : 0.25))
+    const pickFresh = wantFresh > 0
+    const from = pickFresh ? cands.filter(x => fresh.includes(x)) : cands
+    if (!from.length) { wantFresh = 0; continue }
+    // Tus gustos pesan menos que antes (con 2× salían siempre las mismas favoritas)
+    const s = pickFresh ? from[Math.floor(Math.random() * from.length)]
+      : weightedPick(from, x => (1 + Math.log1p(affinity(x)) + (likedPaths.has(x.path) ? 0.5 : 0) + (forgotten(x) ? 2 : 0)) *
+        (pure(x) ? 1 : 0.25) * seenFactor(x))
+    if (pickFresh) wantFresh--
     cands = cands.filter(x => x !== s)
     const a = splitArtists(s.artist)[0] || ''
     if ((perArtist.get(a) || 0) >= cap) continue
@@ -2321,6 +2343,7 @@ async function djPlay(block, prepared, after) {
   dj.on = true
   dj.sameVibe = dj.vibe?.key === block.vibe.key ? dj.sameVibe + 1 : 0
   for (const s of block.songs) dj.used.add(s.path)
+  markDjSeen(block.songs)
   dj.vibe = block.vibe
   dj.recent = [block.vibe.key, ...dj.recent.filter(k => k !== block.vibe.key)].slice(0, 3)
   // Géneros que ya sonaron en la sesión (dj.recent guarda "cumbia+m-bailar", que nunca
