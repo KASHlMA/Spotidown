@@ -235,19 +235,9 @@ img { display: block; }
 
 .dj-body { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 12px; }
 .dj-hero { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 8px 0 16px; flex-shrink: 0; }
-.dj-orb {
-  width: 120px; height: 120px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
-  background: radial-gradient(circle at 30% 30%, #ff7ad9, #7b2ff7 55%, #1b1464);
-  box-shadow: 0 0 0 0 rgba(180, 90, 255, .6); transition: transform .3s;
-}
-.dj-orb span { font-size: 34px; font-weight: 900; letter-spacing: -1px; }
-.dj-orb.speaking { animation: dj-pulse 1.1s ease-in-out infinite; }
-.dj-orb.thinking { animation: dj-think 1.6s linear infinite; }
-@keyframes dj-pulse {
-  0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(180, 90, 255, .55); }
-  50% { transform: scale(1.06); box-shadow: 0 0 0 18px rgba(180, 90, 255, 0); }
-}
-@keyframes dj-think { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+/* Orbe animado (canvas): respira en reposo, gira cuando piensa y se mueve con la voz */
+.dj-orb { width: 168px; height: 168px; margin: -16px 0 -12px; }
+.dj-orb canvas { width: 100%; height: 100%; display: block; }
 .dj-vibe { font-size: 15px; font-weight: 700; text-align: center; color: var(--white); }
 .dj-actions { display: flex; gap: 8px; }
 .dj-actions .btn-pri, .dj-actions .btn-sec { height: 36px; padding: 0 18px; }

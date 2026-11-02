@@ -2193,6 +2193,7 @@ function speak(text, file, onNearEnd) {
     const guard = setTimeout(finish, 45000)
     dj.speaking = true
     duck(true)
+    if (audioCtx.state === 'suspended') audioCtx.resume()
     djSay(text)   // el texto aparece cuando empieza a hablar, no antes
     if (file) {
       djAudio.src = toFileUrl(file)
@@ -2216,6 +2217,10 @@ function speak(text, file, onNearEnd) {
 // llegan, así Nat empieza a hablar ~2 s después en lugar de esperar todo el audio.
 const voiceOut = audioCtx.createGain()   // la voz no pasa por el volumen/analizador de la música
 voiceOut.connect(audioCtx.destination)
+const voiceAnalyser = audioCtx.createAnalyser()
+voiceAnalyser.fftSize = 1024
+voiceOut.connect(voiceAnalyser)
+audioCtx.createMediaElementSource(djAudio).connect(voiceOut)
 const voiceStreams = new Map()
 let streamSeq = 0
 let activeStream = null
@@ -2812,6 +2817,7 @@ async function djAsk(text) {
 // ── Panel del DJ ──────────────────────────────────────────────────────────────
 function renderDjPanel() {
   if (rightMode !== 'dj') return
+  queueMicrotask(startOrb)   // al arrancar la app el orbe todavía no existe
   $('dj-orb').classList.toggle('speaking', dj.speaking)
   $('dj-orb').classList.toggle('thinking', dj.thinking)
   $('dj-vibe').textContent = dj.thinking ? 'Nat está preparando algo…'
@@ -2825,6 +2831,69 @@ function renderDjPanel() {
       : 'Dale a Iniciar DJ. Si conectas Gemini en ajustes, además entiende lo que le escribas y habla con voz natural.'}</li>`
   ul.scrollTop = ul.scrollHeight
 }
+
+// ── Orbe de Nat ───────────────────────────────────────────────────────────────
+// Tres manchas de color que se deforman (suma de senos), con brillo. El volumen de la voz
+// las agranda y las agita; pensando giran más rápido. Sólo se dibuja con el panel abierto.
+const orb = { cv: $('dj-orb-cv'), level: 0, think: 0, t: 0, last: 0, raf: 0 }
+const ORB_LAYERS = [
+  { c: ['#ff5fd2', '#a42cff'], r: 0.78, spd: 0.9, ph: 0 },
+  { c: ['#6a5cff', '#1e90ff'], r: 0.70, spd: -1.2, ph: 2.1 },
+  { c: ['#ff9a3c', '#ff3c7e'], r: 0.58, spd: 1.6, ph: 4.2 },
+]
+const orbBuf = new Float32Array(1024)
+function voiceLevel() {
+  if (!dj.speaking) return 0
+  voiceAnalyser.getFloatTimeDomainData(orbBuf)
+  let sum = 0
+  for (let i = 0; i < orbBuf.length; i++) sum += orbBuf[i] * orbBuf[i]
+  return Math.min(1, Math.sqrt(sum / orbBuf.length) * 5)
+}
+function drawOrb(now) {
+  orb.raf = 0
+  if (rightMode !== 'dj') return
+  const dt = Math.min(0.05, (now - (orb.last || now)) / 1000)
+  orb.last = now
+  const cv = orb.cv, dpr = window.devicePixelRatio || 1
+  const size = Math.round(cv.clientWidth * dpr)
+  if (!size) { orb.raf = requestAnimationFrame(drawOrb); return }
+  if (cv.width !== size) cv.width = cv.height = size
+  const lv = voiceLevel()
+  orb.level += (lv - orb.level) * (lv > orb.level ? 0.5 : 0.12)   // sube rápido, baja suave
+  orb.think += ((dj.thinking ? 1 : 0) - orb.think) * 0.05
+  orb.t += dt * (0.5 + orb.think * 1.8 + orb.level * 2.5)
+  const g = cv.getContext('2d'), c = size / 2, base = size * 0.36
+  g.clearRect(0, 0, size, size)
+  g.globalCompositeOperation = 'screen'
+  const breathe = 1 + Math.sin(now / 1400) * 0.025
+  for (const L of ORB_LAYERS) {
+    const R = base * L.r * breathe * (1 + orb.level * 0.28)
+    const wob = 0.05 + orb.level * 0.22 + orb.think * 0.06
+    const t = orb.t * L.spd + L.ph
+    g.beginPath()
+    for (let i = 0; i <= 72; i++) {
+      const a = (i / 72) * Math.PI * 2
+      const k = 1 + wob * (0.55 * Math.sin(3 * a + t) + 0.3 * Math.sin(5 * a - t * 1.3) + 0.15 * Math.sin(2 * a + t * 0.7))
+      const x = c + Math.cos(a + t * 0.2) * R * k + Math.cos(t) * base * 0.08
+      const y = c + Math.sin(a + t * 0.2) * R * k + Math.sin(t * 1.1) * base * 0.08
+      i ? g.lineTo(x, y) : g.moveTo(x, y)
+    }
+    const grad = g.createRadialGradient(c - R * 0.3, c - R * 0.3, R * 0.1, c, c, R * 1.25)
+    grad.addColorStop(0, L.c[0])
+    grad.addColorStop(0.55, L.c[1] + 'cc')
+    grad.addColorStop(1, L.c[1] + '00')
+    g.fillStyle = grad
+    g.shadowColor = L.c[1]
+    g.shadowBlur = size * (0.06 + orb.level * 0.08)
+    g.globalAlpha = 0.6
+    g.fill()
+  }
+  g.globalAlpha = 1
+  g.shadowBlur = 0
+  g.globalCompositeOperation = 'source-over'
+  orb.raf = requestAnimationFrame(drawOrb)
+}
+function startOrb() { if (!orb.raf && rightMode === 'dj') orb.raf = requestAnimationFrame(drawOrb) }
 
 $('dj-start').addEventListener('click', () => dj.on ? djStop() : djStart())
 $('dj-switch').addEventListener('click', djSwitch)
