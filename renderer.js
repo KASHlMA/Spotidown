@@ -1672,17 +1672,34 @@ function canvasClear() {
 }
 // Loop corto como el Canvas de Spotify: del segundo CANVAS_AT, CANVAS_LEN segundos
 const CANVAS_AT = 30, CANVAS_LEN = 9
-function canvasShow() {
-  // Se muestra un poquito después de que arranca: al inicio YouTube enseña título y logo
-  clearTimeout(canvasState.showTimer)
-  canvasState.showTimer = setTimeout(() => { if (canvasState.frame && !audio.paused) canvasBox.classList.add('on') }, 1500)
+function canvasMode(on) {
+  canvasBox.classList.toggle('on', on)
+  $('right-panel').classList.toggle('canvas-mode', on)
+  canvasBtn()
 }
-function canvasHide() { clearTimeout(canvasState.showTimer); canvasBox.classList.remove('on') }
+function canvasShow() {
+  // Se muestra un poquito después de que arranca (para que ya esté corriendo)
+  clearTimeout(canvasState.showTimer)
+  canvasState.showTimer = setTimeout(() => { if (canvasState.frame && !audio.paused) canvasMode(true) }, 1500)
+}
+function canvasHide() { clearTimeout(canvasState.showTimer); canvasMode(false) }
+// "Cambiar a video" / "Cambiar a carátula": sólo si la canción tiene video
+function canvasBtn() {
+  $('np-switch').hidden = !canvasState.ids.length
+  $('np-switch-text').textContent = canvasState.userOff ? 'Cambiar a video' : 'Cambiar a carátula'
+}
+$('np-lyrics').addEventListener('click', () => navigate({ name: 'lyrics' }))
+$('np-switch').addEventListener('click', () => {
+  canvasState.userOff = !canvasState.userOff
+  if (canvasState.userOff) canvasClear()
+  else { canvasState.i = 0; canvasTry() }
+  canvasBtn()
+})
 
 function canvasTry() {
   canvasClear()
   const id = canvasState.ids[canvasState.i]
-  if (!id) return
+  if (!id) { canvasState.ids = []; canvasBtn(); return }   // ninguno se dejó poner
   const f = document.createElement('iframe')
   f.allow = 'autoplay; encrypted-media'
   // Un pedazo de CANVAS_LEN s desde CANVAS_AT, sin subtítulos (cc_load_policy=0)
@@ -1694,15 +1711,19 @@ function canvasTry() {
 }
 async function updateCanvas() {
   const song = currentSong
-  if (!canvasOn || rightMode !== 'np' || !song || !navigator.onLine) { canvasState.song = null; canvasClear(); return }
+  if (!canvasOn || rightMode !== 'np' || !song || !navigator.onLine) {
+    canvasState.song = null; canvasState.ids = []; canvasClear(); return
+  }
   if (canvasState.song === song) return
   canvasState.song = song
+  canvasState.ids = []
   canvasClear()
   const ids = await api.ytVideos(splitArtists(song.artist)[0] || song.artist || '', cleanTitle(song.title), /en vivo|live/i.test(song.title))
   if (canvasState.song !== song || !ids?.length) return
   canvasState.ids = ids
   canvasState.i = 0
-  canvasTry()
+  canvasBtn()
+  if (!canvasState.userOff) canvasTry()
 }
 window.addEventListener('message', e => {
   if (!canvasState.frame || e.source !== canvasState.frame.contentWindow) return
@@ -1734,8 +1755,12 @@ function setCover(src) {
     else { el.classList.add('ph'); el.innerHTML = svg(I.note) }
   }
   const lyr = $('view-lyrics')
-  if (src) coverColor(src).then(c => { if (currentSong?.cover === src) lyr.style.backgroundColor = tone(c, 0.36) })
-  else lyr.style.backgroundColor = ''
+  if (src) coverColor(src).then(c => {
+    if (currentSong?.cover !== src) return
+    lyr.style.backgroundColor = tone(c, 0.36)
+    $('np-lyrics').style.backgroundColor = tone(c, 0.3)   // la tarjeta de la letra, del color de la portada
+  })
+  else lyr.style.backgroundColor = $('np-lyrics').style.backgroundColor = ''
   updateMediaSession()
 }
 
@@ -3206,11 +3231,16 @@ function buildLyrics(raw) {
   const text = (typeof raw === 'string' ? raw : '').trim()
 
   if (!text) {
+    $('np-lyrics').hidden = true
     inner.innerHTML = '<div class="no-lyrics">Esta canción no tiene letra.<small>Sólo se muestran letras incrustadas en el MP3 (USLT / LRC).</small></div>'
     return
   }
 
   lyricLines = parseLrc(text)
+  const sample = (lyricLines.length ? lyricLines.map(l => l.text) : text.split('\n').map(x => x.trim()))
+    .filter(t => t && !/^\[/.test(t)).slice(0, 4)
+  $('np-lyrics').hidden = !sample.length
+  $('np-lyrics-text').innerHTML = sample.map(t => `<div>${esc(t)}</div>`).join('')
 
   // Sin timestamps — mostrar como texto plano
   if (!lyricLines.length) {
@@ -3438,7 +3468,7 @@ audio.addEventListener('play', () => {
   if (!spectrumRafId) drawSpectrum()
   if (!seekRafId)     rafLoop()
 })
-audio.addEventListener('pause', () => { setPlayState(false); canvasHide(); canvasCmd('pauseVideo') })
+audio.addEventListener('pause', () => { setPlayState(false); canvasCmd('pauseVideo') })
 audio.addEventListener('playing', () => canvasCmd('playVideo'))
 
 // ── Media keys / control de Windows (SMTC) ────────────────────────────────────
