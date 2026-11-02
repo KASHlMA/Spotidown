@@ -21,7 +21,7 @@ const TTS_GAP_MS = 21000   // el nivel gratis de voz permite ~3 frases por minut
 // A la voz actuada sólo se le manda el texto: cualquier instrucción de estilo la acababa
 // leyendo en voz alta a veces. La emoción sale del propio texto (¡…!, ¿a poco no?, la neta…).
 // Cambiar esta etiqueta invalida la caché de audios generados con versiones anteriores.
-const VOICE_VERSION = 'v3-solo-texto'
+const VOICE_VERSION = 'v4-oraciones'
 
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 
@@ -69,7 +69,7 @@ module.exports = function createGemini(dir) {
 
   // Voz por la API en vivo: se abre una sesión, se manda el texto y se junta el audio que
   // regresa. onChunk recibe cada pedazo (PCM 16 bits, 24 kHz) en cuanto llega.
-  // Se resuelve con { wav, said } — said es la transcripción de lo que dijo de verdad
+  // Se resuelve con { pcm, said } — said es la transcripción de lo que dijo de verdad
   function liveSpeak(text, onChunk) {
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(`${LIVE_URL}?key=${encodeURIComponent(settings.key)}`)
@@ -102,8 +102,11 @@ module.exports = function createGemini(dir) {
         if (m.serverContent?.outputTranscription?.text) said += m.serverContent.outputTranscription.text
         if (m.serverContent?.turnComplete) {
           clearTimeout(timer)
-          ws.close()
-          pcm.length ? resolve({ wav: pcmToWav(Buffer.concat(pcm), 24000), said }) : reject(new Error('network'))
+          // La transcripción llega un poco después que el audio: se espera un momento
+          setTimeout(() => {
+            ws.close()
+            pcm.length ? resolve({ pcm: Buffer.concat(pcm), said }) : reject(new Error('network'))
+          }, 700)
         }
       })
       ws.on('close', code => { if (code === 1008 || code === 1011) fail(code === 1008 ? 'invalid-key' : 'quota') })
@@ -131,32 +134,81 @@ module.exports = function createGemini(dir) {
   // Primero la voz nativa en vivo (sin límite; si hay onChunk se va reproduciendo mientras
   // llega). Si falla antes de mandar audio, la voz actuada (10 al día por modelo).
   // Lo que dijo vs. lo que debía decir: la voz nativa a veces improvisa (se inventó a
-  // Juan Gabriel). Cuenta las palabras dichas que no estaban en el texto.
+  // Juan Gabriel) o se brinca partes. Revisa palabras de más y palabras que faltan.
   function faithful(text, said) {
     if (!said.trim()) return true   // sin transcripción no se puede juzgar
-    const norm = s => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9ñ\s]/g, ' ').split(/\s+/).filter(Boolean)
-    const want = new Set(norm(text)), got = norm(said)
-    const extra = got.filter(w => !want.has(w)).length
-    return extra <= Math.max(2, got.length * 0.2)
+    const norm = s => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9ñ\s]/g, ' ')
+      .split(/\s+/).filter(w => w.length > 2)
+    const want = norm(text), got = norm(said)
+    const wantSet = new Set(want), gotSet = new Set(got)
+    const extra = got.filter(w => !wantSet.has(w)).length
+    const missing = want.filter(w => !gotSet.has(w)).length
+    return extra <= Math.max(2, got.length * 0.2) && missing <= Math.max(1, want.length * 0.25)
+  }
+
+  // Oraciones cortas: la voz nativa se brinca o corta partes cuando el texto es largo
+  function splitSentences(text) {
+    const out = []
+    // "feat." / "ft." no terminan una oración
+    const clean = text.replace(/\b(feat|ft|prod|vs|vol)\./gi, '$1')
+    for (const s of clean.match(/[^.!?…]+[.!?…]*\s*/g) || [clean]) {
+      const t = s.trim()
+      if (!t) continue
+      // Pedacitos de menos de 4 palabras ("A darle con todo.") van con la oración anterior
+      if (out.length && t.split(/\s+/).length < 4) out[out.length - 1] += ' ' + t
+      else out.push(t)
+    }
+    return out
+  }
+
+  // Todas las oraciones se generan a la vez (la API en vivo no tiene límite) y se emiten en
+  // orden: la primera suena en cuanto llega y las demás ya están listas cuando les toca, así
+  // que da tiempo de revisarlas y regenerar la que salga mal antes de que suene.
+  async function liveSay(text, onChunk) {
+    const GAP = Buffer.alloc(Math.round(24000 * 0.12) * 2)   // respiro entre oraciones
+    const parts = splitSentences(text).map(t => ({ text: t, chunks: [], emitted: 0, done: false, ok: true }))
+    let cur = 0
+    const pump = () => {
+      while (cur < parts.length) {
+        const p = parts[cur]
+        while (p.emitted < p.chunks.length) onChunk?.(p.chunks[p.emitted++])
+        if (!p.done) return
+        if (cur < parts.length - 1 && p.emitted) onChunk?.(GAP)
+        cur++
+      }
+    }
+    const run = async p => {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        p.chunks = []
+        const { said } = await liveSpeak(p.text, buf => { p.chunks.push(buf); pump() })
+        p.ok = faithful(p.text, said)
+        // Si salió mal y todavía no ha sonado nada de ella, se genera otra vez
+        if (p.ok || p.emitted > 0) break
+        console.warn('DJ: oración repetida por', JSON.stringify(p.text), '→', JSON.stringify(said))
+      }
+      p.done = true
+      pump()
+    }
+    const results = await Promise.allSettled(parts.map(run))
+    const failed = results.find(r => r.status === 'rejected')
+    if (failed) throw Object.assign(failed.reason, { partial: parts.some(p => p.emitted > 0) })
+    const pcm = Buffer.concat(parts.flatMap((p, i) => i < parts.length - 1 ? [...p.chunks, GAP] : p.chunks))
+    return { wav: pcmToWav(pcm, 24000), ok: parts.every(p => p.ok) }
   }
 
   async function say(text, onChunk) {
     const file = path.join(VOICE_DIR, crypto.createHash('sha1').update(VOICE + VOICE_VERSION + text).digest('hex') + '.wav')
     if (fs.existsSync(file)) return file
-    // En streaming ya sonó, así que no se puede repetir; sin streaming (frases preparadas)
-    // se intenta otra vez si improvisó
-    for (let attempt = 0; attempt < (onChunk ? 1 : 2); attempt++) {
-      try {
-        const { wav, said } = await liveSpeak(text, onChunk)
-        const tmp = path.join(VOICE_DIR, `tmp-${process.pid}-${Date.now()}.wav`)
-        fs.mkdirSync(VOICE_DIR, { recursive: true })
-        if (faithful(text, said)) { fs.writeFileSync(file, wav); return file }
-        console.warn('DJ improvisó:', JSON.stringify(text), '→', JSON.stringify(said))
-        if (onChunk) { fs.writeFileSync(tmp, wav); return tmp }   // se reproduce pero no se guarda en caché
-      } catch (e) {
-        if (e.partial || e.message === 'invalid-key') throw e
-        break
-      }
+    try {
+      const { wav, ok } = await liveSay(text, onChunk)
+      fs.mkdirSync(VOICE_DIR, { recursive: true })
+      if (ok) { fs.writeFileSync(file, wav); return file }
+      // Algo salió distinto al texto: se reproduce, pero no se guarda en caché
+      const tmp = path.join(VOICE_DIR, `tmp-${process.pid}-${Date.now()}.wav`)
+      fs.writeFileSync(tmp, wav)
+      return tmp
+    } catch (e) {
+      if (e.partial || e.message === 'invalid-key') throw e
     }
     return ttsFallback(text, file)
   }

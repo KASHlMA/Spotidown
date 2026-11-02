@@ -1890,12 +1890,12 @@ function blockFacts(block) {
   const old = block.songs.find(forgotten)
   return {
     vibra: block.vibe.name.replace(' · ', ' con mood '),
-    primera_cancion: first.title, primer_artista: splitArtists(first.artist)[0] || '',
+    primera_cancion: cleanTitle(first.title), primer_artista: splitArtists(first.artist)[0] || '',
     // Sólo si hay historial: sin él la IA cree que 0 = "nunca la has oído"
     veces_que_la_has_escuchado: p?.n >= 2 ? p.n : undefined,
     otros_artistas: [...new Set(block.songs.slice(1).map(s => splitArtists(s.artist)[0]).filter(Boolean))].slice(0, 3),
     artista_que_mas_escuchas_esta_semana: topArtistWeek(),
-    cancion_que_no_escuchas_hace_mucho: old && old !== first ? `${old.title} de ${splitArtists(old.artist)[0]}` : null,
+    cancion_que_no_escuchas_hace_mucho: old && old !== first ? `${cleanTitle(old.title)} de ${splitArtists(old.artist)[0]}` : null,
   }
 }
 
@@ -2315,7 +2315,8 @@ async function djAsk(text) {
   // abre, para que la voz no tenga hueco que rellenar inventando un artista
   const first = block.songs[0], artist = splitArtists(first.artist)[0] || ''
   let line = cleanLine(plan.reply || `¡Va! Te pongo ${block.vibe.name}.`)
-  if (!fold(line).includes(fold(first.title))) line += ` Arrancamos con ${first.title}${artist ? ` de ${artist}` : ''}.`
+  const title = cleanTitle(first.title)
+  if (!fold(line).includes(fold(title))) line += ` Arrancamos con ${title}${artist ? ` de ${artist}` : ''}.`
   if (rightMode !== 'dj') setRight('dj')
   await djPlay(block, { line })
 }
