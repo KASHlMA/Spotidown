@@ -1666,18 +1666,28 @@ function canvasCmd(func, args = []) {
   canvasState.frame?.contentWindow?.postMessage(JSON.stringify({ event: 'command', func, args }), '*')
 }
 function canvasClear() {
-  canvasBox.classList.remove('on')
+  canvasHide()
   canvasState.frame?.remove()
   canvasState.frame = null
 }
+// Loop corto como el Canvas de Spotify: del segundo CANVAS_AT, CANVAS_LEN segundos
+const CANVAS_AT = 30, CANVAS_LEN = 9
+function canvasShow() {
+  // Se muestra un poquito después de que arranca: al inicio YouTube enseña título y logo
+  clearTimeout(canvasState.showTimer)
+  canvasState.showTimer = setTimeout(() => { if (canvasState.frame && !audio.paused) canvasBox.classList.add('on') }, 1500)
+}
+function canvasHide() { clearTimeout(canvasState.showTimer); canvasBox.classList.remove('on') }
+
 function canvasTry() {
   canvasClear()
   const id = canvasState.ids[canvasState.i]
   if (!id) return
   const f = document.createElement('iframe')
   f.allow = 'autoplay; encrypted-media'
+  // Un pedazo de CANVAS_LEN s desde CANVAS_AT, sin subtítulos (cc_load_policy=0)
   f.src = `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&mute=1&controls=0&disablekb=1&fs=0&iv_load_policy=3` +
-    `&modestbranding=1&playsinline=1&rel=0&loop=1&playlist=${id}&start=30&enablejsapi=1`
+    `&modestbranding=1&playsinline=1&rel=0&cc_load_policy=0&start=${CANVAS_AT}&end=${CANVAS_AT + CANVAS_LEN + 2}&enablejsapi=1`
   f.onload = () => f.contentWindow?.postMessage(JSON.stringify({ event: 'listening', id: 1, channel: 'widget' }), '*')
   canvasState.frame = f
   canvasBox.appendChild(f)
@@ -1699,10 +1709,19 @@ window.addEventListener('message', e => {
   let m
   try { m = typeof e.data === 'string' ? JSON.parse(e.data) : e.data } catch { return }
   if (m.event === 'onError') { canvasState.i++; canvasTry(); return }   // no se deja incrustar: el siguiente
+  if (m.event === 'onReady' || m.event === 'initialDelivery') {
+    canvasCmd('unloadModule', ['captions'])   // sin subtítulos aunque el video los traiga
+    canvasCmd('unloadModule', ['cc'])
+  }
+  // Antes de llegar al final se regresa al inicio del pedazo (al terminar, YouTube enseña
+  // sugerencias y botones)
+  const t = m.info?.currentTime
+  if (typeof t === 'number' && t >= CANVAS_AT + CANVAS_LEN) canvasCmd('seekTo', [CANVAS_AT, true])
   const st = m.event === 'onStateChange' ? m.info : m.info?.playerState
+  if (st === 0) { canvasCmd('seekTo', [CANVAS_AT, true]); canvasCmd('playVideo') }
   if (st === 1) {
-    canvasBox.classList.add('on')
-    if (audio.paused) canvasCmd('pauseVideo')
+    if (audio.paused) { canvasCmd('pauseVideo'); return }
+    if (!canvasBox.classList.contains('on')) canvasShow()
   }
 })
 window.addEventListener('offline', () => { canvasState.song = null; canvasClear() })
@@ -3419,7 +3438,7 @@ audio.addEventListener('play', () => {
   if (!spectrumRafId) drawSpectrum()
   if (!seekRafId)     rafLoop()
 })
-audio.addEventListener('pause', () => { setPlayState(false); canvasCmd('pauseVideo') })
+audio.addEventListener('pause', () => { setPlayState(false); canvasHide(); canvasCmd('pauseVideo') })
 audio.addEventListener('playing', () => canvasCmd('playVideo'))
 
 // ── Media keys / control de Windows (SMTC) ────────────────────────────────────

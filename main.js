@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell, nativeImage, utilityProcess, session } = require('electron')
+const { app, BrowserWindow, ipcMain, shell, nativeImage, utilityProcess, session, webFrameMain } = require('electron')
 const path = require('path')
 const fs   = require('fs')
 const createLastfm = require('./lastfm')
@@ -24,6 +24,27 @@ function createWindow() {
     }
   })
   win.loadFile('index.html')
+  // Canvas: dentro del reproductor de YouTube se esconde todo lo suyo (ícono de pausa al
+  // brincar, títulos, logos, subtítulos, sugerencias, círculo de carga) y el pedazo se repite
+  // directo en el <video> (sin comandos, que hacen aparecer los íconos)
+  win.webContents.on('did-frame-finish-load', (_, isMain, pid, rid) => {
+    if (isMain) return
+    const f = webFrameMain.fromId(pid, rid)
+    if (!f || !/youtube-nocookie\.com\/embed\//.test(f.url)) return
+    const at = Number(new URL(f.url).searchParams.get('start')) || 0
+    const len = Math.max(4, (Number(new URL(f.url).searchParams.get('end')) || at + 11) - at - 2)
+    f.executeJavaScript(`(() => {
+      const st = document.createElement('style')
+      // Se esconde todo menos el video y lo que lo contiene (la interfaz de YouTube cambia de
+      // nombres seguido: player-controls, play-pause-icon, spinner, ytp-…)
+      st.textContent = 'body *:not(video):not(:has(video)){display:none!important}'
+      document.head.appendChild(st)
+      setInterval(() => {
+        const v = document.querySelector('video')
+        if (v && v.currentTime >= ${at + len} - 0.2) v.currentTime = ${at}
+      }, 100)
+    })()`).catch(() => {})
+  })
 }
 
 app.whenReady().then(() => {
