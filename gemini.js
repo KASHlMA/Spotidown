@@ -47,14 +47,14 @@ module.exports = function createGemini(dir) {
   // Audios de un solo uso de versiones anteriores
   try { for (const f of fs.readdirSync(VOICE_DIR)) if (f.startsWith('tmp-')) fs.rmSync(path.join(VOICE_DIR, f), { force: true }) } catch {}
 
-  async function request(model, body, key = settings.key) {
+  async function request(model, body, key = settings.key, signal = null) {
     let res
     try {
       res = await fetch(API + model + ':generateContent', {
         method: 'POST',
         headers: { 'x-goog-api-key': key, 'content-type': 'application/json' },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(60000),
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000),
       })
     } catch {
       throw new Error('network')
@@ -315,17 +315,49 @@ module.exports = function createGemini(dir) {
   }
 
   // Texto (o JSON si se pasa un schema)
-  async function think(system, prompt, schema) {
-    const j = await request(TEXT_MODEL, {
+  // Google a veces tarda muchísimo en contestar la MISMA petición (medido: casi siempre <1.3 s,
+  // pero a veces 10, 40 y hasta 51 s). Si no contesta pronto se manda otra igual en paralelo y
+  // gana la primera; si aun así se pasa del límite, error (el renderer usa una frase armada).
+  // urgent: alguien está esperando (respaldo a los 1.5 s, se rinde a los 6 s).
+  function think(system, prompt, schema, urgent = false) {
+    const body = {
       systemInstruction: { parts: [{ text: system }] },
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
       generationConfig: schema
         ? { responseMimeType: 'application/json', responseSchema: schema, temperature: 0.9 }
         : { temperature: 1 },
+    }
+    const hedgeAfter = urgent ? 1500 : 6000, giveUp = urgent ? 6000 : 45000
+    return new Promise((resolve, reject) => {
+      const ctrls = []
+      let done = false, running = 0, hedged = false
+      const finish = (fn, v) => {
+        if (done) return
+        done = true
+        clearTimeout(hedgeTimer); clearTimeout(giveUpTimer)
+        for (const c of ctrls) c.abort()
+        fn(v)
+      }
+      const launch = () => {
+        const c = new AbortController()
+        ctrls.push(c)
+        running++
+        request(TEXT_MODEL, body, settings.key, c.signal).then(j => {
+          const text = j.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('').trim()
+          if (!text) throw new Error('network')
+          finish(resolve, schema ? JSON.parse(text) : text)
+        }).catch(e => {
+          running--
+          if (done) return
+          if (e.message === 'quota' || e.message === 'invalid-key') return finish(reject, e)
+          if (!hedged) { hedged = true; launch() }   // falló rápido: el respaldo de una vez
+          else if (!running) finish(reject, e)
+        })
+      }
+      const hedgeTimer = setTimeout(() => { if (!hedged) { hedged = true; launch() } }, hedgeAfter)
+      const giveUpTimer = setTimeout(() => finish(reject, new Error('timeout')), giveUp)
+      launch()
     })
-    const text = j.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('').trim()
-    if (!text) throw new Error('network')
-    return schema ? JSON.parse(text) : text
   }
 
   return {

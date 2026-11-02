@@ -315,7 +315,7 @@ ipcMain.handle('dj-say-now', async (e, text, id) => {
     return { error: err.message, partial: !!err.partial }
   }
 })
-ipcMain.handle('dj-think', wrap((system, prompt, schema) => gemini.think(system, prompt, schema)))
+ipcMain.handle('dj-think', wrap((system, prompt, schema, urgent) => gemini.think(system, prompt, schema, urgent)))
 
 ipcMain.on('open-external', (_, url) => {
   if (/^https:\/\//.test(url)) shell.openExternal(url)

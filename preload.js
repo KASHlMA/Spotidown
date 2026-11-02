@@ -21,7 +21,7 @@ contextBridge.exposeInMainWorld('api', {
   djChatLog:        (who, text) => ipcRenderer.send('dj-chat-log', who, text),
   weather:          (city)    => ipcRenderer.invoke('weather', city),
   onDjChunk:        (cb)      => ipcRenderer.on('dj-chunk', (_, id, b64) => cb(id, b64)),
-  djThink:          (sys, prompt, schema) => ipcRenderer.invoke('dj-think', sys, prompt, schema),
+  djThink:          (sys, prompt, schema, urgent) => ipcRenderer.invoke('dj-think', sys, prompt, schema, urgent),
   audioCached:      ()        => ipcRenderer.invoke('audio-cached'),
   audioAnalyze:     (files)   => ipcRenderer.invoke('audio-analyze', files),
   onAudioResult:    (cb)      => ipcRenderer.on('audio-result', (_, m) => cb(m)),

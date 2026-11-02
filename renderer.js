@@ -2128,7 +2128,8 @@ function cleanLine(t) {
 
 const clockText = t => new Date(t).toLocaleTimeString('es-MX', { hour: 'numeric', minute: '2-digit', hour12: true })
 
-async function djLine(kind, block, { noTime = false } = {}) {
+// urgent: alguien está esperando (no se prepara con calma): si Google tarda, frase armada
+async function djLine(kind, block, { noTime = false, urgent = false } = {}) {
   const f = blockFacts(block)
   const ph = partOfDay(new Date(Date.now() + (block.ahead || 0)).getHours())
   f.momento_del_dia = ph === 'manana' ? 'mañana' : ph
@@ -2171,7 +2172,7 @@ async function djLine(kind, block, { noTime = false } = {}) {
     }
   }
   if (dj.ai) {
-    const r = await api.djThink(DJ_SYSTEM, `${task}\nDatos: ${JSON.stringify(f)}${djVariety()}`)
+    const r = await api.djThink(DJ_SYSTEM, `${task}\nDatos: ${JSON.stringify(f)}${djVariety()}`, undefined, urgent)
     if (r.ok) { const line = cleanLine(r.ok); rememberLine(line); return line }
   }
   return templateLine(kind, f)
@@ -2355,7 +2356,7 @@ async function djPlay(block, prepared, after) {
   const ready = prepared && 'file' in prepared
   dj.thinking = !ready
   renderDjPanel()
-  const line = prepared?.line ?? await djLine(block.kind, block)
+  const line = prepared?.line ?? await djLine(block.kind, block, { urgent: true })
   if (block.timed) dj.sinceHello = 0
   if (!dj.on) { dj.thinking = false; renderDjPanel(); return }
   let started = false
@@ -2623,6 +2624,7 @@ function prepareAlt() {
 
 function djStop() {
   dj.on = false
+  djQueued = null
   dj.next = null
   dj.prepWip = null
   dj.alt = null
@@ -2665,13 +2667,17 @@ function djPrepare(ahead = 0) {
   return p
 }
 
-// Un solo cambio de bloque a la vez: si adelantas canciones o le das "siguiente" varias
-// veces mientras Nat prepara el siguiente bloque, no se piden bloques de más
-let djChanging = false
+// Un solo cambio de bloque a la vez. Lo que pidas mientras Nat habla (cambiar vibra, brincar
+// la última canción) se hace en cuanto termina: antes se ignoraba y parecía que no respondía.
+// Sólo se guarda el último (varios clics no piden bloques de más).
+let djChanging = false, djQueued = null
 async function djChange(fn) {
-  if (djChanging) return
+  if (djChanging) { djQueued = fn; return }
   djChanging = true
   try { await fn() } finally { djChanging = false }
+  const q = djQueued
+  djQueued = null
+  if (q && dj.on) djChange(q)
 }
 
 // La frase preparada dice una hora que ya no cuadra (adelantaste o pausaste la canción)
@@ -2685,6 +2691,7 @@ const staleNext = (at = Date.now()) => !!dj.next?.block.hora && dj.next.block.ho
 
 function djNextBlock() {
   return djChange(async () => {
+    if (playContext === DJ_CTX && upcoming(1).length) return
     if (!dj.next && dj.prep) {
       dj.thinking = true   // te avisa que está preparando lo que sigue
       renderDjPanel()
@@ -2879,7 +2886,7 @@ async function djAsk(text) {
       'Si pide algo "como", "parecido a", "estilo" o "tipo" uno o varios artistas o canciones, pon TODOS esos nombres en similar_to y NO en artists; ' +
       'usa artists sólo si pide escuchar a ese artista. Si pide una o varias canciones por su nombre ("pon Gil", ' +
       '"ponme pollypocket"), ponlas en songs tal cual las escribió (con su artista si lo dijo).',
-      `${catalogText(text)}\n\nPetición del usuario: ${text}`, REQ_SCHEMA)
+      `${catalogText(text)}\n\nPetición del usuario: ${text}`, REQ_SCHEMA, true)
     if (r.ok) plan = r.ok
   }
   if (!plan) plan = keywordPlan(text)
