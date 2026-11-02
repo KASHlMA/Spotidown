@@ -330,7 +330,10 @@ img { display: block; }
 /* ── Panel central ── */
 .main { container-type: inline-size; }
 .view { flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative; }
-.scroller { flex: 1; overflow-y: auto; position: relative; min-height: 0; }
+/* Sin anclaje de scroll: la lista virtual cambia filas y espaciadores al desplazarse, y el
+   navegador "compensaba" moviendo el scroll, lo que volvía a cambiar filas (un toque de rueda
+   se iba hasta el fondo) */
+.scroller { flex: 1; overflow-y: auto; position: relative; min-height: 0; overflow-anchor: none; }
 
 /* ── Home ── */
 .home-bg {
