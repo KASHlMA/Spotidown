@@ -2476,7 +2476,7 @@ async function djPlay(block, prepared, after) {
   if (ready) { await after; dj.thinking = false; await speak(line, prepared.file, startMusic) }
   else await speakLive(line, startMusic, after)
   startMusic()
-  setTimeout(() => { if (dj.on && playContext === DJ_CTX) djPrepare(blockLeftMs()) }, 5000)
+  setTimeout(() => { if (dj.on && playContext === DJ_CTX) djPrepare(blockLeftMs()) }, 40000)
   prepareAlt()
 }
 
@@ -2766,12 +2766,9 @@ function prepareWelcome() {
     for (let i = 0; i < 50 && !getGenreGroups().genres.length; i++) await new Promise(r => setTimeout(r, 300))
     if (!(await api.geminiStatus()).hasKey || welcomed) return
     dj.ai = true
+    // Ya no se escribe el saludo completo al abrir la app (gastaba aunque no prendieras el DJ):
+    // al prenderlo suena uno grabado y lo demás se dice en vivo
     await refreshWeather()
-    const block = startBlock('welcome')
-    if (!block) return
-    const line = await djLine('welcome', block)
-    const r = await api.djSay(line, 'gemini')
-    if (r.ok && !welcomed) welcomeReady = { block, line, file: r.ok, at: Date.now() }
   })().finally(() => {
     welcomePrep = null
     setTimeout(warmGreetings, 30000)
@@ -2781,7 +2778,7 @@ function prepareWelcome() {
 // "Cambiar vibra" preparado de antemano: mientras suena la música, Nat ya tiene grabada la
 // siguiente vibra con su frase. Sólo se guarda si salió con su voz (si no, se hace en vivo).
 function prepareAlt() {
-  if (!dj.on || !dj.ai || dj.alt || dj.altPrep) return
+  if (!dj.on || !dj.ai || dj.alt || dj.altPrep || !dj.switches) return
   dj.altPrep = (async () => {
     await new Promise(r => setTimeout(r, 20000))   // deja respirar a Google (sesiones por minuto)
     // Si al siguiente le toca decir la hora no se prepara: grabada de antes, la hora salía vieja
@@ -2828,11 +2825,6 @@ function djPrepare(ahead = 0) {
     const file = await djVoice(line)
     if (!dj.on || dj.prepWip !== wip) return   // ya se usó en vivo
     dj.next = { block, line, file }
-    if (block.hora) {
-      const pl = await djLine(block.kind, { ...block, hora: undefined, timed: undefined }, { noTime: true })
-      const plain = { line: pl, file: await djVoice(pl) }
-      if (dj.next?.block === block) dj.next.plain = plain
-    }
   })().catch(() => {})   // si algo falla, se arma en vivo al acabar el bloque
   const p = dj.prep
   p.finally(() => { if (dj.prep === p) dj.prep = null; if (dj.prepWip === wip) dj.prepWip = null })
@@ -2887,7 +2879,7 @@ function djNextBlock() {
       dj.next = null
       block.ahead = 0
       block.timed = block.hora = undefined
-      await djPlay(block, plain || undefined)
+      await djPlay(block, plain || undefined, plain ? undefined : await coverWith('next'))
       return
     }
     if (dj.next) { const { block, line, file } = dj.next; await djPlay(block, { line, file }); return }
@@ -2898,6 +2890,7 @@ function djNextBlock() {
 }
 
 function djSwitch() {
+  dj.switches = (dj.switches || 0) + 1
   return djChange(async () => {
     const alt = dj.alt
     dj.alt = null

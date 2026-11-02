@@ -319,7 +319,25 @@ module.exports = function createGemini(dir) {
   // pero a veces 10, 40 y hasta 51 s). Si no contesta pronto se manda otra igual en paralelo y
   // gana la primera; si aun así se pasa del límite, error (el renderer usa una frase armada).
   // urgent: alguien está esperando (respaldo a los 1.5 s, se rinde a los 6 s).
+  // Tope diario (el gratis es de 500 y se reinicia a medianoche de California): lo de fondo
+  // se detiene en 380 y sólo lo urgente (tus peticiones, frases en vivo) sigue hasta 480. Sin
+  // cupo, el renderer usa frases armadas.
+  const BUDGET_PATH = path.join(dir, 'gemini-count.json')
+  const today = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' })
+  function spend() {
+    let c
+    try { c = JSON.parse(fs.readFileSync(BUDGET_PATH, 'utf8')) } catch { c = {} }
+    if (c.day !== today()) c = { day: today(), n: 0 }
+    c.n++
+    try { fs.writeFileSync(BUDGET_PATH, JSON.stringify(c)) } catch {}
+    return c.n
+  }
+  function used() {
+    try { const c = JSON.parse(fs.readFileSync(BUDGET_PATH, 'utf8')); return c.day === today() ? c.n : 0 } catch { return 0 }
+  }
+
   function think(system, prompt, schema, urgent = false) {
+    if (used() >= (urgent ? 480 : 380)) return Promise.reject(new Error('budget'))
     const body = {
       systemInstruction: { parts: [{ text: system }] },
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
@@ -327,7 +345,8 @@ module.exports = function createGemini(dir) {
         ? { responseMimeType: 'application/json', responseSchema: schema, temperature: 0.9 }
         : { temperature: 1 },
     }
-    const hedgeAfter = urgent ? 1500 : 6000, giveUp = urgent ? 6000 : 45000
+    // Lo de fondo no manda respaldo (gasta del límite diario): sólo espera más
+    const hedgeAfter = urgent ? 1500 : Infinity, giveUp = urgent ? 6000 : 45000
     return new Promise((resolve, reject) => {
       const ctrls = []
       let done = false, running = 0, hedged = false
@@ -342,6 +361,7 @@ module.exports = function createGemini(dir) {
         const c = new AbortController()
         ctrls.push(c)
         running++
+        spend()
         request(TEXT_MODEL, body, settings.key, c.signal).then(j => {
           const text = j.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('').trim()
           if (!text) throw new Error('network')
@@ -350,11 +370,12 @@ module.exports = function createGemini(dir) {
           running--
           if (done) return
           if (e.message === 'quota' || e.message === 'invalid-key') return finish(reject, e)
-          if (!hedged) { hedged = true; launch() }   // falló rápido: el respaldo de una vez
+          if (!hedged && urgent) { hedged = true; launch() }   // falló rápido: el respaldo de una vez
+          else if (!hedged) finish(reject, e)
           else if (!running) finish(reject, e)
         })
       }
-      const hedgeTimer = setTimeout(() => { if (!hedged) { hedged = true; launch() } }, hedgeAfter)
+      const hedgeTimer = isFinite(hedgeAfter) ? setTimeout(() => { if (!hedged) { hedged = true; launch() } }, hedgeAfter) : null
       const giveUpTimer = setTimeout(() => finish(reject, new Error('timeout')), giveUp)
       launch()
     })
@@ -378,7 +399,7 @@ module.exports = function createGemini(dir) {
       return { ok: true }
     },
 
-    say, sayNow, think,
+    say, sayNow, think, used,
     cached: text => fs.existsSync(fileFor(text)),   // ¿esta frase ya está grabada?
     // Borra las frases de más de maxDays días (transiciones, peticiones: nunca se repiten
     // igual), menos las de keep (los saludos guardados, que sí se vuelven a usar)
