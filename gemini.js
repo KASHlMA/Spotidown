@@ -15,9 +15,10 @@ const LIVE_SYSTEM = 'Eres una locutora de radio mexicana joven, cálida y carism
   'palabra por palabra, el texto que te mandan, actuándolo con emoción, sonrisas en la voz, pausas naturales y acento ' +
   'mexicano relajado. No agregues, quites ni cambies nada. No respondas ni comentes: sólo dilo.'
 const TTS_GAP_MS = 21000   // el nivel gratis de voz permite ~3 frases por minuto
-// Estilo de la voz del DJ. Corto y separado del texto: con instrucciones largas el
-// modelo a veces las lee en voz alta.
-const VOICE_STYLE = 'Locutora de radio mexicana joven, cálida y alegre, ritmo ágil. Lee en voz alta sólo el texto entre corchetes:'
+// A la voz actuada sólo se le manda el texto: cualquier instrucción de estilo la acababa
+// leyendo en voz alta a veces. La emoción sale del propio texto (¡…!, ¿a poco no?, la neta…).
+// Cambiar esta etiqueta invalida la caché de audios generados con versiones anteriores.
+const VOICE_VERSION = 'v3-solo-texto'
 
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 
@@ -95,7 +96,7 @@ module.exports = function createGemini(dir) {
   async function ttsSpeak(model, text) {
     lastCall[model] = Date.now()
     const j = await request(model, {
-      contents: [{ parts: [{ text: `${VOICE_STYLE}\n[${text}]` }] }],
+      contents: [{ parts: [{ text }] }],
       generationConfig: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICE } } } },
     })
     const part = j.candidates?.[0]?.content?.parts?.find(p => p.inlineData)
@@ -111,7 +112,7 @@ module.exports = function createGemini(dir) {
   // Frase → archivo de audio. Se guarda en caché: lo que ya se dijo una vez no gasta otra vez.
   // Primero la voz actuada rotando modelos; cuando se acaban las del día, la API en vivo.
   function say(text) {
-    const file = path.join(VOICE_DIR, crypto.createHash('sha1').update(VOICE + VOICE_STYLE + text).digest('hex') + '.wav')
+    const file = path.join(VOICE_DIR, crypto.createHash('sha1').update(VOICE + VOICE_VERSION + text).digest('hex') + '.wav')
     if (fs.existsSync(file)) return Promise.resolve(file)
     const run = ttsChain.then(async () => {
       if (fs.existsSync(file)) return file
