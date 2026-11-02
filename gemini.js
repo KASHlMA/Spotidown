@@ -6,8 +6,10 @@ const WebSocket = require('ws')
 const API        = 'https://generativelanguage.googleapis.com/v1beta/models/'
 const LIVE_URL   = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent'
 const TEXT_MODEL = 'gemini-flash-lite-latest'
-const TTS_MODEL  = 'gemini-3.8-flash-tts'   // nivel gratis: 10 frases al día
-const LIVE_MODEL = 'gemini-3.8-live'        // nivel gratis: sin límite diario; dice el texto tal cual
+// Modelos de voz "actuada" (la que suena expresiva). En el nivel gratis cada uno da
+// 10 frases al día y ~3 por minuto, con cuota separada: rotándolos son ~40 al día.
+const TTS_MODELS = ['gemini-3.8-flash-tts', 'gemini-3.1-flash-tts-preview', 'gemini-2.5-flash-preview-tts', 'gemini-3.8-flash-lite-tts']
+const LIVE_MODEL = 'gemini-3.8-live'        // sin límite diario pero más plana: sólo de respaldo
 const VOICE      = 'Laomedeia'
 const LIVE_SYSTEM = 'Eres una locutora de radio mexicana joven, cálida y carismática. Tu único trabajo es decir EN VOZ ALTA, ' +
   'palabra por palabra, el texto que te mandan, actuándolo con emoción, sonrisas en la voz, pausas naturales y acento ' +
@@ -15,7 +17,8 @@ const LIVE_SYSTEM = 'Eres una locutora de radio mexicana joven, cálida y carism
 const TTS_GAP_MS = 21000   // el nivel gratis de voz permite ~3 frases por minuto
 // Estilo de la voz del DJ (la instrucción se lee, el texto se actúa)
 const VOICE_STYLE = 'Habla como una locutora de radio mexicana joven, cálida y carismática, platicando con un amigo: ' +
-  'con emoción, sonrisas en la voz, pausas naturales y una risita ligera donde quede. Acento mexicano, relajado, nada formal. Di esto:'
+  'con emoción y sonrisas en la voz, a ritmo ágil de radio (un poco rápido, sin alargar las pausas). Acento mexicano, ' +
+  'relajado, nada formal. Di esto:'
 
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 
@@ -29,7 +32,10 @@ module.exports = function createGemini(dir) {
   const VOICE_DIR     = path.join(dir, 'dj-voice')
   const settings = readJson(SETTINGS_PATH, {})
   let ttsChain = Promise.resolve()
-  let lastTts  = 0
+  const lastCall  = {}   // modelo → último uso (para respetar ~3 por minuto)
+  const exhausted = {}   // modelo → día (hora del Pacífico) en que se acabó su cuota
+  // La cuota diaria de Google se reinicia a medianoche del Pacífico
+  const quotaDay = () => new Date().toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles' })
 
   async function request(model, body, key = settings.key) {
     let res
@@ -45,7 +51,11 @@ module.exports = function createGemini(dir) {
     }
     const j = await res.json().catch(() => ({}))
     if (j.error) {
-      if (j.error.code === 429) throw new Error('quota')
+      if (j.error.code === 429) {
+        // "PerDay" = se acabó la cuota del día; si no, sólo fue el límite por minuto
+        const daily = (j.error.details || []).some(d => (d.violations || []).some(v => /PerDay/i.test(v.quotaId || '')))
+        throw new Error(daily ? 'quota' : 'network')
+      }
       if (j.error.code === 400 || j.error.code === 401 || j.error.code === 403) throw new Error('invalid-key')
       throw new Error('network')
     }
@@ -83,32 +93,42 @@ module.exports = function createGemini(dir) {
     })
   }
 
+  async function ttsSpeak(model, text) {
+    lastCall[model] = Date.now()
+    const j = await request(model, {
+      contents: [{ parts: [{ text: `${VOICE_STYLE}\n${text}` }] }],
+      generationConfig: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICE } } } },
+    })
+    const part = j.candidates?.[0]?.content?.parts?.find(p => p.inlineData)
+    if (!part) throw new Error('network')
+    const data = Buffer.from(part.inlineData.data, 'base64')
+    return /wav/.test(part.inlineData.mimeType) ? data : pcmToWav(data, +(/rate=(\d+)/.exec(part.inlineData.mimeType)?.[1] || 24000))
+  }
+
   // Frase → archivo de audio. Se guarda en caché: lo que ya se dijo una vez no gasta otra vez.
-  // Primero la API en vivo (sin límite diario); si falla, el modelo de voz normal (10 al día).
+  // Primero la voz actuada rotando modelos; cuando se acaban las del día, la API en vivo.
   function say(text) {
     const file = path.join(VOICE_DIR, crypto.createHash('sha1').update(VOICE + VOICE_STYLE + text).digest('hex') + '.wav')
     if (fs.existsSync(file)) return Promise.resolve(file)
     const run = ttsChain.then(async () => {
       if (fs.existsSync(file)) return file
-      try {
-        const wav = await liveSpeak(text)
-        fs.mkdirSync(VOICE_DIR, { recursive: true })
-        fs.writeFileSync(file, wav)
-        return file
-      } catch {}
-      const wait = lastTts + TTS_GAP_MS - Date.now()
-      if (wait > 0) await sleep(wait)
-      lastTts = Date.now()
-      const j = await request(TTS_MODEL, {
-        contents: [{ parts: [{ text: `${VOICE_STYLE}\n${text}` }] }],
-        generationConfig: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICE } } } },
-      })
-      const part = j.candidates?.[0]?.content?.parts?.find(p => p.inlineData)
-      if (!part) throw new Error('network')
-      let data = Buffer.from(part.inlineData.data, 'base64')
-      if (!/wav/.test(part.inlineData.mimeType)) data = pcmToWav(data, +(/rate=(\d+)/.exec(part.inlineData.mimeType)?.[1] || 24000))
+      let wav = null
+      const day = quotaDay()
+      // El modelo disponible que menos tenga que esperar por el límite por minuto
+      const ready = TTS_MODELS.filter(m => exhausted[m] !== day)
+        .sort((a, b) => (lastCall[a] || 0) - (lastCall[b] || 0))
+      for (const model of ready) {
+        const wait = (lastCall[model] || 0) + TTS_GAP_MS - Date.now()
+        if (wait > 0) await sleep(wait)
+        try { wav = await ttsSpeak(model, text); break }
+        catch (e) {
+          if (e.message === 'quota') exhausted[model] = day
+          else if (e.message !== 'network') break
+        }
+      }
+      if (!wav) wav = await liveSpeak(text)
       fs.mkdirSync(VOICE_DIR, { recursive: true })
-      fs.writeFileSync(file, data)
+      fs.writeFileSync(file, wav)
       return file
     })
     ttsChain = run.catch(() => {})

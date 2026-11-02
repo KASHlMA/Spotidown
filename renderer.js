@@ -977,7 +977,7 @@ function buildHome() {
 
   const recents = recentPaths.map(p => songByPath.get(p)).filter(Boolean)
   const tiles = [
-    { title: 'DJ', cls: 'tile-dj', html: '<span>DJ</span>',
+    { title: 'DJ Nat', cls: 'tile-dj', html: '<span>DJ</span>',
       open: () => { if (rightMode !== 'dj') setRight('dj') }, play: () => djStart() },
     { title: 'Tus me gusta', cls: 'tile-liked', icon: I.heartFill,
       open: () => navigate({ name: 'liked' }), play: () => playList(likedSongs(), null, LIKED_CTX) },
@@ -1507,7 +1507,7 @@ function renderRight() {
   $('rp-queue').hidden = rightMode !== 'queue'
   $('rp-dj').hidden    = rightMode !== 'dj'
   $('rp-title').textContent = rightMode === 'queue' ? 'Cola'
-    : rightMode === 'dj' ? 'DJ'
+    : rightMode === 'dj' ? 'DJ Nat'
     : (playContext?.title || currentSong?.album || 'Reproduciendo')
   if (rightMode === 'queue') renderQueue()
   if (rightMode === 'np') renderNpNext()
@@ -1812,9 +1812,9 @@ function weightedPick(items, weight) {
 // Arma bloques de canciones según tus gustos, la hora y el día, y entre bloques
 // habla. Con Gemini escribe lo que dice y entiende peticiones; sin Gemini usa
 // frases armadas y palabras clave. La voz es Gemini (Laomedeia) o la de Windows.
-const DJ_CTX = { key: 'dj:', title: 'DJ' }
+const DJ_CTX = { key: 'dj:', title: 'DJ Nat' }
 const dj = {
-  on: false, ai: false, vibe: null, recent: [], next: null, preparing: false,
+  on: false, ai: false, vibe: null, recent: [], next: null, prep: null,
   ttsOffUntil: 0, log: [], thinking: false, speaking: false,
 }
 const DAYS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado']
@@ -1905,15 +1905,15 @@ function blockFacts(block) {
 const DJ_SYSTEM =
   'Eres la voz que presenta la música en el reproductor personal del usuario, como una locutora de radio mexicana ' +
   'joven: cálida, carismática y con jerga mexicana natural (la neta, va, ¿a poco no?), sin exagerar. ' +
-  'Reglas: de 1 a 2 frases y máximo 30 palabras. Se escribe "rola" (con una sola ele). NUNCA te presentes ni te nombres (no digas DJ, diyéi, "aquí tu…", ' +
-  '"soy tu…"). NO saludes ni digas la hora o el día, salvo que la tarea lo pida. Ve directo a la música. ' +
+  'Te llamas DJ Nat. Reglas: de 1 a 2 frases y máximo 25 palabras. Se escribe "rola" (con una sola ele). ' +
+  'NO te presentes ni digas tu nombre (nada de "soy DJ Nat", "aquí tu…") salvo que la tarea lo pida. NO saludes ni digas la hora o el día, salvo que la tarea lo pida. Ve directo a la música. ' +
   'Usa sólo los datos que te dan; no inventes canciones, artistas ni datos. Sin emojis, comillas, asteriscos ni ' +
   'listas. Háblale de tú. Varía tus frases: no empieces siempre igual.'
 
 const DJ_TASK = {
-  welcome: 'El usuario acaba de abrir la app. Salúdalo con el saludo y su nombre (si lo hay), dile la hora en palabras ' +
+  welcome: 'El usuario acaba de abrir la app. Salúdalo con el saludo y su nombre (si lo hay), preséntate ("soy DJ Nat"), dile la hora en palabras ' +
            '(ej. "son las once y media"), y dile que empiezan con una playlist que le hiciste, mencionando la vibra y la ' +
-           'primera rola. Puedes usar hasta 40 palabras.',
+           'primera rola. Máximo 30 palabras.',
   intro:   'Es la primera canción de la sesión: un saludo muy corto (dos o tres palabras) y presenta el bloque.',
   next:    'Haz la transición al siguiente bloque como en la radio, sin saludar.',
   switch:  'El usuario pidió cambiar de vibra. Confírmalo con buena onda y presenta el nuevo bloque, sin saludar.',
@@ -1921,7 +1921,7 @@ const DJ_TASK = {
 
 const DJ_TEMPLATES = {
   welcome: [
-    '{saludo}{nombre}. Son las {hora}. Empecemos con una playlist que te hice: {vibra}, y abre {artista}.',
+    '{saludo}{nombre}. Soy DJ Nat y son las {hora}. Empecemos con una playlist que te hice: {vibra}, y abre {artista}.',
   ],
   intro: [
     '¡Qué onda! Vamos a arrancar con {vibra}, y para abrir, {artista}.',
@@ -1979,20 +1979,27 @@ async function djVoice(text) {
   return r.ok || null
 }
 
-// Mientras el DJ habla, la música baja
+// Mientras el DJ habla la música baja; al terminar sube poco a poco
+const musicLevel = () => (muted ? 0 : volume) * VOL_BOOST
 function duck(on) {
-  const v = (muted ? 0 : volume) * VOL_BOOST
-  gainNode.gain.setTargetAtTime(on ? v * 0.22 : v, audioCtx.currentTime, 0.25)
+  const g = gainNode.gain, now = audioCtx.currentTime
+  g.cancelScheduledValues(now)
+  g.setValueAtTime(g.value, now)
+  g.setTargetAtTime(on ? musicLevel() * 0.2 : musicLevel(), now, on ? 0.25 : 0.7)
 }
 
 const djAudio = $('dj-voice')
-function speak(text, file) {
+// onNearEnd: se llama cuando a la voz le falta ~1.5 s (ahí entra la música nueva)
+function speak(text, file, onNearEnd) {
   return new Promise(resolve => {
-    let done = false
+    let done = false, near = false
+    const nearEnd = () => { if (!near) { near = true; onNearEnd?.() } }
     const finish = () => {
       if (done) return
       done = true
       clearTimeout(guard)
+      djAudio.ontimeupdate = null
+      nearEnd()
       dj.speaking = false
       duck(false)
       renderDjPanel()
@@ -2005,6 +2012,7 @@ function speak(text, file) {
     if (file) {
       djAudio.src = toFileUrl(file)
       djAudio.onended = djAudio.onerror = finish
+      djAudio.ontimeupdate = () => { if (djAudio.duration - djAudio.currentTime <= 1.5) nearEnd() }
       djAudio.play().catch(finish)
     } else if ('speechSynthesis' in window) {
       const u = new SpeechSynthesisUtterance(text)
@@ -2021,22 +2029,28 @@ function speak(text, file) {
 
 function djSay(text) { dj.log.push({ who: 'dj', text }); dj.log = dj.log.slice(-30); renderDjPanel() }
 
-// Pone un bloque: la música arranca ya (bajita) mientras se prepara lo que dirá el DJ
+// Pone un bloque como en la radio: primero habla Nat (lo que ya sonaba sigue mientras
+// prepara qué decir) y cuando está por terminar entra la primera canción desde abajo.
 async function djPlay(block, prepared) {
   dj.on = true
   dj.vibe = block.vibe
   dj.recent = [block.vibe.key, ...dj.recent.filter(k => k !== block.vibe.key)].slice(0, 3)
   dj.next = null
-  playList(block.songs, 0, DJ_CTX)
-  duck(true)
-  dj.thinking = !prepared
+  dj.thinking = !(prepared && 'file' in prepared)
   renderDjPanel()
   const line = prepared?.line ?? await djLine(block.kind, block)
   const file = prepared && 'file' in prepared ? prepared.file : await djVoice(line)
   dj.thinking = false
-  if (!dj.on) { duck(false); return }
+  if (!dj.on) { renderDjPanel(); return }
   djSay(line)
-  await speak(line, file)
+  let started = false
+  const startMusic = () => {
+    if (started || !dj.on) return
+    started = true
+    playList(block.songs, 0, DJ_CTX)   // entra bajita (la voz la tiene agachada) y sube al terminar
+  }
+  await speak(line, file, startMusic)
+  startMusic()
 }
 
 function newBlock(kind, exclude = []) {
@@ -2083,21 +2097,20 @@ function djStop() {
 }
 
 // Mientras suena la última canción del bloque se prepara el siguiente (frase + voz)
-async function djPrepare() {
-  if (dj.preparing || dj.next) return
-  dj.preparing = true
-  try {
+function djPrepare() {
+  if (dj.next || dj.prep) return dj.prep
+  dj.prep = (async () => {
     const block = newBlock('next', dj.vibe ? [dj.vibe.key] : [])
     if (!block) return
     const line = await djLine('next', block)
     const file = await djVoice(line)
     if (dj.on) dj.next = { block, line, file }
-  } finally {
-    dj.preparing = false
-  }
+  })().finally(() => { dj.prep = null })
+  return dj.prep
 }
 
 async function djNextBlock() {
+  if (!dj.next && dj.prep) await dj.prep   // si aún se está preparando, se espera en lugar de empezar otro
   if (dj.next) { const { block, line, file } = dj.next; await djPlay(block, { line, file }); return }
   const block = newBlock('next', dj.vibe ? [dj.vibe.key] : [])
   if (block) await djPlay(block)
@@ -2112,7 +2125,7 @@ async function djSwitch() {
 const REQ_SCHEMA = {
   type: 'object',
   properties: {
-    reply:      { type: 'string', description: 'Lo que la diyéi le contesta al usuario en voz alta (1-2 frases)' },
+    reply:      { type: 'string', description: 'Lo que DJ Nat le contesta al usuario en voz alta (1-2 frases)' },
     title:      { type: 'string', description: 'Nombre corto de la vibra que vas a poner' },
     genres:     { type: 'array', items: { type: 'string' }, description: 'ids de géneros a incluir' },
     moods:      { type: 'array', items: { type: 'string' }, description: 'ids de moods a incluir' },
@@ -2226,8 +2239,8 @@ function renderDjPanel() {
   if (rightMode !== 'dj') return
   $('dj-orb').classList.toggle('speaking', dj.speaking)
   $('dj-orb').classList.toggle('thinking', dj.thinking)
-  $('dj-vibe').textContent = dj.thinking ? 'El DJ está pensando…'
-    : dj.on && dj.vibe ? `Sonando: ${dj.vibe.name}` : 'Tu DJ personal'
+  $('dj-vibe').textContent = dj.thinking ? 'Nat está preparando algo…'
+    : dj.on && dj.vibe ? `Sonando: ${dj.vibe.name}` : 'DJ Nat, tu DJ personal'
   $('dj-start').textContent = dj.on ? 'Detener DJ' : 'Iniciar DJ'
   $('dj-switch').hidden = !dj.on
   const ul = $('dj-log')
