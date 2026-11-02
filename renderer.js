@@ -1859,38 +1859,50 @@ function pickVibe(exclude = [], avoid = []) {
 
 const forgotten = s => (likedPaths.has(s.path) || plays[s.path]?.n >= 3) && Date.now() - (plays[s.path]?.last || 0) > 30 * 864e5
 
-// 5–6 canciones: lo que más te late de ese pool, alguna olvidada, máximo 2 por artista
-function buildBlock(pool, n = 5) {
+// Género principal de una canción (el de más puntaje): una cumbia que también trae "vallenato"
+// es cumbia, no vallenato
+const mainGenre = s => (s.genres || []).find(id => !GENRE_BY_ID.get(id)?.mood)
+
+// 5–6 canciones: lo que más te late de ese pool, alguna olvidada, máximo 2 por artista.
+// genre: si la vibra es un género, las que son de otro género principal pesan poco, máximo
+// 1 por bloque y nunca abren (si no, la cumbia que más escuchas abría casi cualquier vibra)
+function buildBlock(pool, n = 5, genre = null) {
   const t = Date.now() - 3 * 36e5
   const recent = new Set(playLog.filter(([, ts]) => ts > t).map(([p]) => p))
   let cands = pool.filter(s => s !== currentSong && !recent.has(s.path))
   if (cands.length < n) cands = pool.filter(s => s !== currentSong)
+  const pure = s => !genre || mainGenre(s) === genre
+  const enoughPure = cands.filter(pure).length >= n
+  let mixed = 0
   const out = [], perArtist = new Map()
   // Si el pool es de pocos artistas (p. ej. "pon a Kevin Kaarl") se permiten más por artista
   const artists = new Set(cands.map(s => splitArtists(s.artist)[0] || ''))
   const cap = Math.max(2, Math.ceil(n / artists.size))
   while (out.length < n && cands.length) {
-    const s = weightedPick(cands, x => 1 + 2 * Math.log1p(affinity(x)) + (likedPaths.has(x.path) ? 1 : 0) + (forgotten(x) ? 2 : 0))
+    const s = weightedPick(cands, x => (1 + 2 * Math.log1p(affinity(x)) + (likedPaths.has(x.path) ? 1 : 0) + (forgotten(x) ? 2 : 0)) *
+      (pure(x) ? 1 : 0.25))
     cands = cands.filter(x => x !== s)
     const a = splitArtists(s.artist)[0] || ''
     if ((perArtist.get(a) || 0) >= cap) continue
+    if (!pure(s) && enoughPure && mixed++ >= 1) continue
     perArtist.set(a, (perArtist.get(a) || 0) + 1)
     out.push(s)
   }
-  // Arranca con una conocida
-  out.sort((a, b) => affinity(b) - affinity(a))
+  // Arranca con una conocida que sea de verdad de ese género
+  out.sort((a, b) => (pure(b) - pure(a)) || affinity(b) - affinity(a))
   return out
 }
 
 // Vibra para arrancar: lo que estabas escuchando antes ("seguimos con tu mood de hace rato")
 // la mayoría de las veces; si no, una al azar, evitando la misma con la que arrancó la vez pasada
 function startVibe() {
-  const lastStart = load('djLastStart', null)
+  const starts = load('djStarts', [])
   const last = currentSong || songByPath.get(recentPaths[0])
   const gg = getGenreGroups()
-  const g = last?.genres?.map(id => gg.map.get(id)).find(x => x && !x.mood && x.songs.length >= 8)
-  if (g && g.key !== lastStart && Math.random() < 0.7) return { ...g, fromRecent: true }
-  return pickVibe([], lastStart ? [lastStart] : [])
+  const g = gg.map.get(last && mainGenre(last))
+  if (g && g.songs.length >= 8 && !starts.includes(g.key) && Math.random() < 0.4) return { ...g, fromRecent: true }
+  // Los de los últimos arranques quedan fuera; si eso deja muy pocos, sólo pesan menos
+  return pickVibe(starts) || pickVibe([], starts)
 }
 
 // Lo más escuchado de la semana, para que Nat lo comente de vez en cuando
@@ -2220,7 +2232,7 @@ async function djPlay(block, prepared, after) {
 
 function startBlock(kind) {
   const vibe = startVibe()
-  return vibe && { kind, vibe, songs: buildBlock(vibe.songs) }
+  return vibe && { kind, vibe, songs: buildBlock(vibe.songs, 5, vibe.key.split('+')[0]) }
 }
 
 // Siguiente bloque: sigue con la misma vibra (hasta 3 bloques o hasta que se acaben sus
@@ -2230,7 +2242,7 @@ async function continueBlock() {
   const v = dj.vibe
   if (v?.songs && dj.sameVibe < 2) {
     const pool = v.songs.filter(s => !dj.used.has(s.path))
-    if (pool.length >= 5) return { kind: 'continue', vibe: v, songs: buildBlock(pool) }
+    if (pool.length >= 5) return { kind: 'continue', vibe: v, songs: buildBlock(pool, 5, v.key.split('+')[0]) }
   }
   const seed = currentSong
   if (seed) {
@@ -2246,7 +2258,7 @@ async function continueBlock() {
 
 function newBlock(kind, exclude = []) {
   const vibe = pickVibe(exclude)
-  return vibe && { kind, vibe, songs: buildBlock(vibe.songs) }
+  return vibe && { kind, vibe, songs: buildBlock(vibe.songs, 5, vibe.key.split('+')[0]) }
 }
 
 let userName    = load('userName', '')
@@ -2266,7 +2278,8 @@ async function djStart() {
   const greet = kind === 'welcome' && !ready ? await cachedGreeting() : null
   const block = ready?.block || startBlock(greet ? 'welcome2' : kind)
   if (!block) { djSay('Todavía estoy conociendo tu música. Dame un ratito a que termine de clasificarla.'); return }
-  save('djLastStart', block.vibe.key.split('+')[0])
+  const g0 = block.vibe.key.split('+')[0]
+  save('djStarts', [g0, ...load('djStarts', []).filter(k => k !== g0)].slice(0, 3))
   if (rightMode !== 'dj') setRight('dj')
   const after = greet ? speak(greet.text, greet.file) : undefined
   await djPlay(block, ready && { line: ready.line, file: ready.file }, after)
