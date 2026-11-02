@@ -1822,6 +1822,7 @@ function weightedPick(items, weight) {
 const DJ_CTX = { key: 'dj:', title: 'DJ Nat' }
 const dj = {
   on: false, ai: false, vibe: null, recent: [], played: new Set(), next: null, prep: null, alt: null, altPrep: null, sinceHello: 0,
+  quietUntil: 0,   // hasta cuándo no se graba nada en segundo plano (le acabas de escribir)
   sameVibe: 0, used: new Set(),   // bloques seguidos en la misma vibra / canciones ya puestas en la sesión
   log: [], thinking: false, speaking: false,
 }
@@ -2286,9 +2287,9 @@ async function speakLive(text, onNearEnd, after) {
   const t0 = Date.now()
   let r = await api.djSayNow(text, id)
   // Google no mandó audio (no sonó nada): se reintenta con la voz de Nat; Dalia sólo si en
-  // ~9 s no lo logra (ya está lista, así que entra sin otra espera)
+  // ~12 s no lo logra (ya está lista, así que entra sin otra espera)
   while (activeStream === player && !player.started() && r.error && !r.partial &&
-         r.error !== 'invalid-key' && Date.now() - t0 < 9000) {
+         r.error !== 'invalid-key' && Date.now() - t0 < 12000) {
     r = await api.djSayNow(text, id)
   }
   if (activeStream !== player) return   // se detuvo el DJ mientras hablaba
@@ -2410,7 +2411,7 @@ const GREETINGS = {
     '¡Hey, {n}! DJ Nat en la madrugada, aquí seguimos al pie del cañón.',
     '¡{n}! Aquí DJ Nat, pa la desvelada no hay nada como buena música.',
     '¡Qué onda, {n}! DJ Nat al habla, ya de madrugada y seguimos con todo.',
-    '¡Shhh, {n}! Aquí DJ Nat bajito, que los demás duermen pero nosotros no.',
+    '¡Qué onda, {n}! Aquí DJ Nat, los demás ya duermen pero nosotros no.',
     '¡Qué onda, {n}! DJ Nat aquí, ¿no puedes dormir? Yo te hago compañía.',
     '¡{n}, ya es tardísimo! Pero bueno, DJ Nat se queda contigo en el desvelo.',
   ],
@@ -2522,9 +2523,12 @@ async function warmGreetings() {
     // Primero los de este momento (y los especiales de hoy), luego todos los demás
     const all = [...greetingsNow(), ...Object.values(GREETINGS).flat(), ...Object.values(GREETINGS_WEATHER).flat(),
                  ...Object.values(GREETINGS_DAY).flatMap(d => Object.values(d).flat())].map(greetingText)
+    const fails = load('greetFails', {})
     for (const t of [...new Set(all)]) {
-      if (await api.djCached(t)) continue
+      if ((fails[t] || 0) >= 2 || await api.djCached(t)) continue
+      while (Date.now() < dj.quietUntil || dj.thinking || dj.speaking) await new Promise(r => setTimeout(r, 5000))
       await api.djSay(t, 'gemini')
+      if (!(await api.djCached(t))) { fails[t] = (fails[t] || 0) + 1; save('greetFails', fails) }
       await new Promise(r => setTimeout(r, 30000))
     }
   } finally {
@@ -2561,7 +2565,7 @@ function prepareAlt() {
   dj.altPrep = (async () => {
     await new Promise(r => setTimeout(r, 20000))   // deja respirar a Google (sesiones por minuto)
     // Si al siguiente le toca decir la hora no se prepara: grabada de antes, la hora salía vieja
-    if (!dj.on || dj.sinceHello >= 2) return
+    if (!dj.on || dj.sinceHello >= 2 || Date.now() < dj.quietUntil) return
     const block = newBlock('switch', dj.vibe ? [dj.vibe.key] : [])
     if (!block) return
     const line = await djLine('switch', block)
@@ -2768,6 +2772,7 @@ async function poolFromPlan(plan) {
 async function djAsk(text) {
   text = text.trim()
   if (!text) return
+  dj.quietUntil = Date.now() + 60000
   dj.log.push({ who: 'yo', text })
   api.djChatLog('Tú', text)
   dj.thinking = true
