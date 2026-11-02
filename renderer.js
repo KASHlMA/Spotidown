@@ -1680,7 +1680,7 @@ function canvasMode(on) {
 function canvasShow() {
   // Se muestra un poquito después de que arranca (para que ya esté corriendo)
   clearTimeout(canvasState.showTimer)
-  canvasState.showTimer = setTimeout(() => { if (canvasState.frame && !audio.paused) canvasMode(true) }, 1500)
+  canvasState.showTimer = setTimeout(() => { if (canvasState.frame) canvasMode(true) }, 1500)
 }
 function canvasHide() { clearTimeout(canvasState.showTimer); canvasMode(false) }
 // "Cambiar a video" / "Cambiar a carátula": sólo si la canción tiene video
@@ -1741,7 +1741,6 @@ window.addEventListener('message', e => {
   const st = m.event === 'onStateChange' ? m.info : m.info?.playerState
   if (st === 0) { canvasCmd('seekTo', [CANVAS_AT, true]); canvasCmd('playVideo') }
   if (st === 1) {
-    if (audio.paused) { canvasCmd('pauseVideo'); return }
     if (!canvasBox.classList.contains('on')) canvasShow()
   }
 })
@@ -3468,7 +3467,7 @@ audio.addEventListener('play', () => {
   if (!spectrumRafId) drawSpectrum()
   if (!seekRafId)     rafLoop()
 })
-audio.addEventListener('pause', () => { setPlayState(false); canvasCmd('pauseVideo') })
+audio.addEventListener('pause', () => setPlayState(false))   // el Canvas sigue en loop aunque pauses
 audio.addEventListener('playing', () => canvasCmd('playVideo'))
 
 // ── Media keys / control de Windows (SMTC) ────────────────────────────────────
