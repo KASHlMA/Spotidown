@@ -1814,7 +1814,7 @@ function weightedPick(items, weight) {
 // frases armadas y palabras clave. La voz es Gemini (Laomedeia) o la de Windows.
 const DJ_CTX = { key: 'dj:', title: 'DJ Nat' }
 const dj = {
-  on: false, ai: false, vibe: null, recent: [], next: null, prep: null, alt: null, altPrep: null, sinceHello: 0,
+  on: false, ai: false, vibe: null, recent: [], played: new Set(), next: null, prep: null, alt: null, altPrep: null, sinceHello: 0,
   sameVibe: 0, used: new Set(),   // bloques seguidos en la misma vibra / canciones ya puestas en la sesión
   log: [], thinking: false, speaking: false,
 }
@@ -1838,15 +1838,16 @@ function timeBoost(id) {
 // uniform: todos los géneros con la misma probabilidad (para arrancar el DJ)
 function pickVibe(exclude = [], avoid = [], uniform = false) {
   const gg = getGenreGroups()
-  // Logaritmo: si no, un género con muchas canciones escuchadas (cumbia) ganaba casi siempre
-  const score = songs => { let a = 0; for (const s of songs) a += affinity(s); return 1 + Math.log1p(a) }
+  // Tus gustos pesan poco (logaritmo a la mitad): si no, el género que más escuchas (cumbia)
+  // salía en casi cada cambio de vibra
+  const score = songs => { let a = 0; for (const s of songs) a += affinity(s); return 1 + 0.5 * Math.log1p(a) }
   // Se excluye por género: "merengue+m-bailar" también excluye "merengue" (si no, "cambiar
   // de vibra" podía pasar de merengue a merengue)
   const excludeGenres = exclude.map(k => k.split('+')[0])
   const genres = gg.genres.filter(g => g.songs.length >= 8 && !excludeGenres.includes(g.key))
   if (!genres.length) return null
   const genre = uniform ? genres[Math.floor(Math.random() * genres.length)] : weightedPick(genres, g => score(g.songs) * timeBoost(g.key) *
-    (dj.recent.includes(g.key) ? 0.15 : 1) * (avoid.includes(g.key) ? 0.2 : 1))
+    (dj.played.has(g.key) ? 0.05 : 1) * (avoid.includes(g.key) ? 0.2 : 1))
   const inGenre = new Set(genre.songs)
   const combos = gg.moods.map(m => ({ m, songs: m.songs.filter(s => inGenre.has(s)) })).filter(c => c.songs.length >= 6)
   // Con mood la mitad de las veces, o casi siempre si la hora pide uno (noche → triste…)
@@ -2232,6 +2233,9 @@ async function djPlay(block, prepared, after) {
   for (const s of block.songs) dj.used.add(s.path)
   dj.vibe = block.vibe
   dj.recent = [block.vibe.key, ...dj.recent.filter(k => k !== block.vibe.key)].slice(0, 3)
+  // Géneros que ya sonaron en la sesión (dj.recent guarda "cumbia+m-bailar", que nunca
+  // coincidía con "cumbia", y por eso la cumbia regresaba seguido)
+  if (!block.vibe.key.startsWith('sim:')) dj.played.add(block.vibe.key.split('+')[0])
   dj.sinceHello = block.timed ? 0 : dj.sinceHello + 1
   dj.next = null
   const ready = prepared && 'file' in prepared
@@ -2290,6 +2294,7 @@ let welcomed = false
 async function djStart() {
   if (!allSongs.length) return
   dj.recent = []
+  dj.played = new Set()
   dj.used = new Set()
   const kind = welcomed ? 'intro' : 'welcome'
   welcomed = true
