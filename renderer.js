@@ -2461,8 +2461,31 @@ const REQ_SCHEMA = {
     exclude:    { type: 'array', items: { type: 'string' }, description: 'ids de géneros o moods a evitar' },
     artists:    { type: 'array', items: { type: 'string' }, description: 'artistas a incluir, escritos igual que en la lista' },
     similar_to: { type: 'string', description: 'artista o canción a la que se debe parecer, o vacío' },
+    songs:      { type: 'array', description: 'canciones específicas que pidió por su nombre, en el orden en que las pidió',
+                  items: { type: 'object', properties: { title: { type: 'string' }, artist: { type: 'string' } }, required: ['title'] } },
   },
   required: ['reply', 'title'],
+}
+
+// Busca en la biblioteca una canción pedida por nombre ("pollypocket", "Gil de Milo J"):
+// sin importar mayúsculas, espacios ni "(Visualizer)". El título exacto gana sobre uno que
+// sólo lo contiene ("Gil" antes que "El Gil de Tu Ex"); si dijo el artista, pesa mucho.
+function findSong(title, artist = '') {
+  const n = s => fold(s).replace(/[^a-z0-9ñ]/g, '')
+  const want = n(cleanTitle(title)), who = n(artist)
+  if (want.length < 2) return null
+  let best = null, bestScore = 0
+  for (const s of allSongs) {
+    const t = n(cleanTitle(s.title))
+    let score = t === want ? 100 : t.length >= 3 && want.includes(t) ? 40 + t.length : want.length >= 3 && t.includes(want) ? 50 : 0
+    if (!score) continue
+    if (who && splitArtists(s.artist).some(a => n(a) === who || n(a).includes(who))) score += 60
+    // Escrito igualito, espacios incluidos ("pollypocket" → POLLYPOCKET, no "Polly Pocket")
+    if (fold(cleanTitle(s.title)).trim() === fold(title).trim()) score += 15
+    score += Math.min(10, affinity(s))   // entre duplicados, la que más escuchas
+    if (score > bestScore) { best = s; bestScore = score }
+  }
+  return best
 }
 
 function catalogText() {
@@ -2496,6 +2519,9 @@ function keywordPlan(text) {
     exclude: rest.flatMap(seg => mentions(seg).map(g => g.key)),
     artists,
     similar_to: like ? like[1].trim() : '',
+    // Si no nombró estilo ni artista, quizá es el nombre de una canción ("pon pollypocket")
+    songs: inc.length || artists.length || like ? []
+      : [{ title: head.replace(/^\s*(ponme|pon|quiero|reproduce|toca|ponte)\s+(la\s+)?(cancion|rola)?\s*(de\s+)?/, '') }],
   }
 }
 
@@ -2545,19 +2571,26 @@ async function djAsk(text) {
       DJ_SYSTEM + ' Ahora el usuario te pide algo: elige qué poner usando SÓLO los ids y artistas de la lista y ' +
       'contéstale directo, sin saludar ni presentarte (ej. "¡Va! Unos corriditos pa la peda, cero reggaetón"). ' +
       'Si pide algo "como", "parecido a" o "tipo" un artista o canción, pon ese nombre en similar_to y NO en artists; ' +
-      'usa artists sólo si pide escuchar a ese artista.',
+      'usa artists sólo si pide escuchar a ese artista. Si pide una o varias canciones por su nombre ("pon Gil", ' +
+      '"ponme pollypocket"), ponlas en songs tal cual las escribió (con su artista si lo dijo).',
       `${catalogText()}\n\nPetición del usuario: ${text}`, REQ_SCHEMA)
     if (r.ok) plan = r.ok
   }
   if (!plan) plan = keywordPlan(text)
-  const pool = await poolFromPlan(plan)
+  // Canciones pedidas por nombre: van primero, tal cual
+  const wanted = [...new Set((plan.songs || []).map(x => findSong(x.title, x.artist)).filter(Boolean))]
+  let pool = await poolFromPlan(plan)
+  // Después de las pedidas, rolas que suenan parecido (si no pidió también un estilo)
+  if (wanted.length && pool.length < 5) pool = await similarSongs(wanted[0])
   dj.thinking = false
-  if (pool.length < 3) {
+  if (!wanted.length && pool.length < 3) {
     const line = 'Uy, no encontré nada así en tu música. ¿Me lo pides de otra forma?'
     await speakLive(line)
     return
   }
-  const block = { kind: 'request', vibe: { key: 'req:' + fold(plan.title || text), name: plan.title || text, songs: pool }, songs: buildBlock(pool, 6) }
+  const rest = pool.filter(s => !wanted.includes(s))
+  const songs = [...wanted, ...buildBlock(rest, Math.max(3, 6 - wanted.length))]
+  const block = { kind: 'request', vibe: { key: 'req:' + fold(plan.title || text), name: plan.title || text, songs: rest }, songs }
   // La respuesta se escribió antes de elegir canciones: se le agrega la que de verdad
   // abre, para que la voz no tenga hueco que rellenar inventando un artista
   const first = block.songs[0], artist = splitArtists(first.artist)[0] || ''
