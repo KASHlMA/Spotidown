@@ -264,7 +264,8 @@ ipcMain.handle('dj-clean', (_, keep) => gemini.cleanup(keep))
 
 // ── IPC: video de fondo (tipo Canvas de Spotify) ─────────────────────────────
 // Se busca en YouTube leyendo la página de resultados (sin key ni límite diario). Se prefiere
-// el video oficial del artista; letras, "audio" y visualizers no (son una imagen fija).
+// el video oficial del artista (o su visualizer oficial, que es una animación en loop); letras,
+// "audio" y visualizers de fans no.
 // Se guarda por canción: cada una se busca una sola vez.
 const YT_PATH = path.join(app.getPath('userData'), 'yt-cache.json')
 let ytCache = null
@@ -290,7 +291,7 @@ async function ytSearch(q) {
   return out
 }
 ipcMain.handle('yt-videos', async (_, artist, title, live) => {
-  const key = ytFold(artist) + '|' + ytFold(title)
+  const key = 'v2|' + ytFold(artist) + '|' + ytFold(title)   // v2: con visualizers oficiales
   if (!ytCache) { try { ytCache = JSON.parse(fs.readFileSync(YT_PATH, 'utf8')) } catch { ytCache = {} } }
   const c = ytCache[key]
   if (c && Date.now() - c.at < (c.ids.length ? 60 : 7) * 864e5) return c.ids
@@ -300,11 +301,13 @@ ipcMain.handle('yt-videos', async (_, artist, title, live) => {
   const scored = list.map(v => {
     const vt = ytFold(v.title), ch = ytFold(v.channel)
     if (!vt.includes(t.split(' ').slice(0, 3).join(' '))) return null            // otra canción
-    if (/\b(letra|lyrics?|lyric video|audio|visualizer|karaoke|cover|reaccion|reaction|8d|slowed|sped up|nightcore)\b/.test(vt)) return null
+    if (/\b(letra|lyrics?|lyric video|audio|karaoke|cover|reaccion|reaction|8d|slowed|sped up|nightcore)\b/.test(vt)) return null
     if (!live && /\b(en vivo|live|concierto)\b/.test(vt)) return null
+    const official = a && (ch.includes(a) || /vevo/.test(ch))
+    if (/\bvisualizer\b/.test(vt) && !official) return null
     let score = 0
     if (/\b(video oficial|official video|official music video|videoclip|video clip)\b/.test(vt)) score += 3
-    if (a && (ch.includes(a) || /vevo/.test(ch))) score += 2
+    if (official) score += 2
     if (a && vt.includes(a)) score += 1
     return { id: v.id, score }
   }).filter(Boolean).sort((x, y) => y.score - x.score)

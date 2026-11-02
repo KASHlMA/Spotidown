@@ -1661,6 +1661,7 @@ function renderNpGenres() {
 // video, o si el video no se deja incrustar, se queda la carátula. Sólo con el panel abierto.
 const canvasBox = $('np-canvas')
 const canvasState = { song: null, ids: [], i: 0, frame: null }
+let canvasOn = load('canvasOn', true)
 function canvasCmd(func, args = []) {
   canvasState.frame?.contentWindow?.postMessage(JSON.stringify({ event: 'command', func, args }), '*')
 }
@@ -1683,7 +1684,7 @@ function canvasTry() {
 }
 async function updateCanvas() {
   const song = currentSong
-  if (rightMode !== 'np' || !song || !navigator.onLine) { canvasState.song = null; canvasClear(); return }
+  if (!canvasOn || rightMode !== 'np' || !song || !navigator.onLine) { canvasState.song = null; canvasClear(); return }
   if (canvasState.song === song) return
   canvasState.song = song
   canvasClear()
@@ -3652,6 +3653,7 @@ function openSettings() {
   $('gem-msg').textContent = dj.ai ? 'Gemini ya está conectado. Pega otra key sólo si quieres cambiarla.' : ''
   $('dj-name').value = userName
   $('dj-city').value = djCity
+  $('canvas-on').checked = canvasOn
   $('lfm-msg').className = $('gem-msg').className = 'modal-msg'
   $('lfm-key').value = $('gem-key').value = ''
   $('lfm-key').focus()
@@ -3688,6 +3690,11 @@ async function saveSettings() {
 }
 
 $('btn-settings').addEventListener('click', openSettings)
+$('canvas-on').addEventListener('change', e => {
+  canvasOn = e.target.checked
+  save('canvasOn', canvasOn)
+  updateCanvas()
+})
 $('lfm-cancel').addEventListener('click', closeSettings)
 $('lfm-save').addEventListener('click', saveSettings)
 $('lfm-create').addEventListener('click', () => api.openExternal('https://www.last.fm/api/account/create'))

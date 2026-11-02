@@ -287,6 +287,18 @@ img { display: block; }
 .modal-h3:first-of-type { margin-top: 0; }
 .modal-text { font-family: inherit; }
 .modal-gap { margin-top: 8px; }
+/* Interruptor tipo Spotify (se aplica al instante, sin "Guardar") */
+.modal-switch { display: flex; align-items: center; gap: 16px; cursor: pointer; }
+.modal-switch span { flex: 1; display: flex; flex-direction: column; gap: 2px; font-size: 14px; }
+.modal-switch small { color: var(--t2); font-size: 13px; }
+.modal-switch input { display: none; }
+.modal-switch i { position: relative; width: 40px; height: 22px; border-radius: 11px; background: #535353; flex-shrink: 0; transition: background .2s; }
+.modal-switch i::after {
+  content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%;
+  background: #fff; transition: transform .2s;
+}
+.modal-switch input:checked + i { background: var(--accent); }
+.modal-switch input:checked + i::after { transform: translateX(18px); }
 .modal-check { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 14px; color: var(--t2); cursor: pointer; }
 .modal-check input { width: 16px; height: 16px; accent-color: var(--accent); }
 .modal { max-height: calc(100vh - 32px); overflow-y: auto; }
