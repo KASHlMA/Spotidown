@@ -863,6 +863,9 @@ function renderView() {
 }
 
 // ── Sidebar: Tu biblioteca ────────────────────────────────────────────────────
+// Son miles de filas: las primeras salen al instante y las demás se van armando en pedacitos
+// (antes se armaban todas de golpe y la app tardaba segundos en mostrar el inicio)
+let sidebarJob = 0
 function renderSidebar() {
   document.querySelectorAll('.sb-chips .chip').forEach(c =>
     c.classList.toggle('active', c.dataset.filter === libFilter))
@@ -870,15 +873,19 @@ function renderSidebar() {
   const ul = $('lib-list')
   const keepTop = ul.scrollTop
   ul.innerHTML = ''
-  const frag = document.createDocumentFragment()
+  const rows = []
+  const frag = { appendChild: li => rows.push(() => li) }
 
-  const add = (key, nav, title, sub, fillThumb, round) => {
+  const add = (...args) => rows.push(() => sidebarRow(...args))
+  const sidebarRow = (key, nav, title, sub, fillThumb, round) => {
     const li = document.createElement('li')
     li.dataset.key = key
     li.title = title
     const th = document.createElement('div')
     th.className = 'lib-thumb' + (round ? ' round' : '')
-    fillThumb(th)
+    // La imagen se carga hasta que la fila se ve
+    th._lazy = () => fillThumb(th)
+    lazyObs.observe(th)
     const tx = document.createElement('div')
     tx.className = 'lib-text'
     tx.innerHTML = `<div class="lib-name">${esc(title)}</div><div class="lib-sub">${esc(sub)}</div>`
@@ -887,7 +894,7 @@ function renderSidebar() {
     spk.innerHTML = svg(I.volMid)
     li.append(th, tx, spk)
     li.addEventListener('click', () => navigate(nav))
-    frag.appendChild(li)
+    return li
   }
 
   if (libFilter === 'all') {
@@ -923,9 +930,21 @@ function renderSidebar() {
     g.albumList.forEach(a => add(`album:${a.key}`, { name: 'album', key: a.key }, a.name, `Álbum • ${a.artist || 'Varios artistas'}`,
       th => fillCover(th, a.songs, I.disc)))
 
-  ul.appendChild(frag)
+  const job = ++sidebarJob
+  const put = (from, to) => {
+    const f = document.createDocumentFragment()
+    for (let i = from; i < Math.min(to, rows.length); i++) f.appendChild(rows[i]())
+    ul.appendChild(f)
+    markSidebar()
+  }
+  put(0, 60)
   ul.scrollTop = keepTop
-  markSidebar()
+  const more = from => {
+    if (job !== sidebarJob || from >= rows.length) return
+    put(from, from + 150)
+    setTimeout(() => more(from + 150), 16)
+  }
+  setTimeout(() => more(60), 300)
 }
 
 function markSidebar() {
