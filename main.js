@@ -390,11 +390,12 @@ ipcMain.on('dj-chat-log', (_, who, text) => {
 })
 ipcMain.handle('dj-say-now', async (e, text, id) => {
   try {
-    return { ok: await gemini.sayNow(text, buf => { if (!e.sender.isDestroyed()) e.sender.send('dj-chunk', id, buf.toString('base64')) }) }
+    return { ok: await gemini.sayNow(text, buf => { if (!e.sender.isDestroyed()) e.sender.send('dj-chunk', id, buf.toString('base64')) }, id) }
   } catch (err) {
     return { error: err.message, partial: !!err.partial }
   }
 })
+ipcMain.on('dj-cancel', (_, id) => gemini.cancelNow(id))
 ipcMain.handle('dj-think', wrap((system, prompt, schema, urgent) => gemini.think(system, prompt, schema, urgent)))
 
 ipcMain.on('open-external', (_, url) => {

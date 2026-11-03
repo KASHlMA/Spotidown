@@ -202,7 +202,11 @@ module.exports = function createGemini(dir) {
     for (let attempt = 1; attempt <= attempts; attempt++) {
       let session = null
       try {
+        // Lo de fondo espera a que nadie esté esperando a Nat (con muchas sesiones a la vez
+        // Google manda el texto pero no el audio)
+        while (waiting > 0) await sleep(500)
         session = await openLiveRetry(text)
+        background.add(session)
         let buf = await session.speak(ON_AIR)
         if (!buf.length) throw Object.assign(new Error('network'), { detail: `sin audio; dijo: ${session.said()}` })
         await sleep(1200)   // la transcripción llega un poco después que el audio
@@ -230,6 +234,7 @@ module.exports = function createGemini(dir) {
         if (e.message === 'invalid-key') throw e
       } finally {
         session?.close()
+        background.delete(session)
       }
       // Reintentos pegados también salían sin audio (Google satura y sólo transcribe): espera
       if (attempt < attempts) await sleep(attempt * 4000)
@@ -254,10 +259,25 @@ module.exports = function createGemini(dir) {
   // empieza a hablar en ~2-3 s. Un solo intento (si Google no manda audio, lanza error sin haber
   // sonado nada y el renderer usa Dalia, que ya tiene lista). Si cortó el final, lo que faltó
   // se genera y se encadena también en vivo. Se resuelve con { file } si ya estaba en caché.
-  async function sayNow(text, onChunk) {
+  // Intentos en vivo que se pueden cancelar (cuando otro intento ganó la carrera)
+  const liveNow = new Map()
+  const cancelled = new Set()   // cancelados mientras todavía se conectaban
+  const cancelNow = id => { cancelled.add(id); liveNow.get(id)?.close(); liveNow.delete(id) }
+  // Cuando alguien espera a Nat (sayNow), lo de fondo (liveSay) se quita: se cierran sus
+  // sesiones y no abre otras hasta que Nat termine
+  const background = new Set()
+  let waiting = 0
+  async function sayNow(text, onChunk, id) {
+    waiting++
+    for (const s of background) s.close()
+    try { return await sayNowInner(text, onChunk, id) } finally { waiting-- }
+  }
+  async function sayNowInner(text, onChunk, id) {
     const file = fileFor(text)
     if (fs.existsSync(file)) return { file }
     const session = await openLive(text)
+    if (id != null) liveNow.set(id, session)
+    if (cancelled.delete(id)) { session.close(); throw new Error('cancelled') }
     let emitted = false
     // Compuerta: el audio se retiene hasta que la transcripción muestra cómo empieza. Si
     // empieza con una acotación "(Con energía…)", se corta antes de que se escuche nada.
@@ -313,6 +333,7 @@ module.exports = function createGemini(dir) {
       throw Object.assign(e, { partial: emitted })
     } finally {
       session.close()
+      liveNow.delete(id)
     }
   }
 
@@ -411,7 +432,7 @@ module.exports = function createGemini(dir) {
       return { ok: true }
     },
 
-    say, sayNow, think, used,
+    say, sayNow, cancelNow, think, used,
     cached: text => fs.existsSync(fileFor(text)),   // ¿esta frase ya está grabada?
     // Borra las frases de más de maxDays días (transiciones, peticiones: nunca se repiten
     // igual), menos las de keep (los saludos guardados, que sí se vuelven a usar)

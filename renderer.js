@@ -2444,9 +2444,11 @@ function streamVoice(id, { onFirst, onNearEnd, after }) {
   }
   // after: lo que está sonando antes (el saludo grabado); mientras, los pedazos se guardan
   if (after) after.then(() => { gateOpen = true; for (const b of pending.splice(0)) schedule(b); check() })
-  voiceStreams.set(id, b64 => { dj.voiceWaiting = true; gateOpen ? schedule(b64) : pending.push(b64) })
-  const stop = () => { clearInterval(timer); voiceStreams.delete(id) }
+  const feed = b64 => { dj.voiceWaiting = true; gateOpen ? schedule(b64) : pending.push(b64) }
+  if (id != null) voiceStreams.set(id, feed)
+  const stop = () => { clearInterval(timer); if (id != null) voiceStreams.delete(id) }
   return {
+    feed,
     started: () => next > 0 || pending.length > 0,
     end: () => { ended = true; check(); return done.finally(stop) },
     cancel: () => { pending.length = 0; for (const s of sources) try { s.stop() } catch {} ; stop(); resolveDone() },
@@ -2458,23 +2460,21 @@ function streamVoice(id, { onFirst, onNearEnd, after }) {
 async function speakLive(text, onNearEnd, after) {
   if (!dj.ai) { const file = await djVoice(text); await after; return speak(text, file, onNearEnd) }
   const dalia = api.djSay(text, 'dalia')
-  const id = ++streamSeq
   let near = false
   const nearEnd = () => { if (!near) { near = true; onNearEnd?.() } }
-  const player = streamVoice(id, {
+  const player = streamVoice(null, {
     onFirst: () => { dj.thinking = false; dj.speaking = true; duck(true); djSay(text) },
     onNearEnd: nearEnd,
     after,
   })
   activeStream = player
   const t0 = Date.now()
-  let r = await api.djSayNow(text, id)
-  // Google no mandó audio (no sonó nada): se reintenta con la voz de Nat; Dalia sólo si en
-  // ~12 s no lo logra (ya está lista, así que entra sin otra espera)
+  // Google a veces manda el texto pero no el audio: se intenta otra vez (con dos intentos a la
+  // vez) hasta ~12 s; si no, Dalia (o la voz del celular), que ya está lista
+  let r
+  do r = await raceVoice(text, player)
   while (activeStream === player && !player.started() && r.error && !r.partial &&
-         r.error !== 'invalid-key' && Date.now() - t0 < 12000) {
-    r = await api.djSayNow(text, id)
-  }
+         r.error !== 'invalid-key' && Date.now() - t0 < 12000)
   if (activeStream !== player) return   // se detuvo el DJ mientras hablaba
   activeStream = null
   if (player.started()) {
@@ -2491,6 +2491,37 @@ async function speakLive(text, onNearEnd, after) {
   await after
   dj.thinking = false
   return speak(text, file, onNearEnd)
+}
+
+// Dos intentos de voz a la vez: si en 2 s el primero no manda audio (o falla antes), sale otro, y
+// el primero que mande audio es el que suena (el otro se cancela). Igual que con el texto.
+function raceVoice(text, player) {
+  return new Promise(resolve => {
+    const ids = []
+    let winner = null, pending = 0, hedged = false, last = null
+    const launch = () => {
+      const id = ++streamSeq
+      ids.push(id)
+      pending++
+      voiceStreams.set(id, b64 => {
+        if (winner == null) { winner = id; for (const o of ids) if (o !== id) api.djCancel?.(o) }
+        if (winner === id) player.feed(b64)
+      })
+      api.djSayNow(text, id).then(r => {
+        voiceStreams.delete(id)
+        pending--
+        if (winner === id || r.ok?.file || r.error === 'invalid-key') { clearTimeout(t); resolve(r); return }
+        if (winner != null) return   // perdió la carrera: se espera al que sí está sonando
+        last = r
+        if (!hedged && activeStream === player) { hedged = true; clearTimeout(t); launch() }
+        else if (!pending) { clearTimeout(t); resolve(last) }
+      })
+    }
+    launch()
+    const t = setTimeout(() => {
+      if (winner == null && !hedged && activeStream === player) { hedged = true; launch() }
+    }, 2000)
+  })
 }
 
 function djSay(text) { dj.log.push({ who: 'dj', text }); dj.log = dj.log.slice(-30); api.djChatLog('Nat', text); renderDjPanel() }
