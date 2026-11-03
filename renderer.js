@@ -1414,18 +1414,86 @@ function setHeroColor(css) {
   $('view-collection').style.setProperty('--hero', css)
 }
 
-// Lo que escribes en "Buscar en esta lista" (se borra al abrir otra)
-let colSongs = [], colFilter = ''
+// ── Filtros por estilo dentro de cada lista (como Spotify: "Sierreño", "Indie", "Lentos"…) ──
+// Cada uno junta géneros de la app, etiquetas de Last.fm de la canción y lo que dijo el análisis
+// de audio (estilos de Discogs y moods). No cambian los géneros ni los mixes: sólo filtran la lista.
+const LATIN = ['salsa', 'cumbia', 'corridos', 'regional', 'reggaeton', 'trap-latino', 'bachata', 'merengue', 'vallenato', 'pop-latino', 'rock-es']
+const CHIPS = [
+  { id: 'latino',     name: 'Latino',        genres: LATIN },
+  { id: 'corridos',   name: 'Corridos',      genres: ['corridos'] },
+  { id: 'sierreno',   name: 'Sierreño',      tags: ['sierreno', 'sierreño', 'requinto', 'sierreño tumbado'] },
+  { id: 'banda',      name: 'Banda',         tags: ['banda', 'banda sinaloense', 'tecnobanda'] },
+  { id: 'norteno',    name: 'Norteño',       tags: ['norteno', 'norteño', 'nortena', 'norteña'], styles: ['Norteño'] },
+  { id: 'cumbia',     name: 'Cumbia',        genres: ['cumbia'], styles: ['Cumbia'] },
+  { id: 'reggaeton',  name: 'Reggaetón',     genres: ['reggaeton'] },
+  { id: 'electropop', name: 'Electropop',    tags: ['electropop', 'synthpop', 'synth-pop', 'synth pop'], styles: ['Synth-pop', 'Dance-pop'] },
+  { id: 'poprock',    name: 'Pop rock',      tags: ['pop rock', 'pop-rock'], styles: ['Pop Rock'] },
+  { id: 'indie',      name: 'Indie',         tags: ['indie', 'indie pop', 'indie rock', 'bedroom pop', 'indie latino', 'dream pop'], styles: ['Indie Rock', 'Indie Pop', 'Dream Pop'] },
+  { id: 'folk',       name: 'Folk',          tags: ['folk', 'indie folk', 'contemporary folk', 'acoustic'], styles: ['Folk', 'Folk Rock', 'Neofolk', 'Acoustic'] },
+  { id: 'beats',      name: 'Beats',         tags: ['beats', 'lofi', 'lo-fi', 'instrumental hip-hop', 'instrumental hip hop', 'boom bap', 'chillhop'], styles: ['Instrumental', 'Lo-Fi', 'Boom Bap'] },
+  { id: 'sofis',      name: 'Sofisticación', genres: ['jazz', 'rnb'], styles: ['Jazz---', 'Funk / Soul---', 'Bossa Nova'] },
+  { id: 'chill',      name: 'Chill',         genres: ['m-chill'], moods: ['relaxing', 'chill'] },
+  { id: 'serenidad',  name: 'Serenidad',     moods: ['meditative', 'calm', 'soft', 'deep'] },
+  { id: 'lentos',     name: 'Lentos',        genres: ['balada'], moods: ['ballad', 'slow'], styles: ['Bolero', 'Ballad'] },
+  { id: 'energetica', name: 'Energética',    genres: ['m-energia'], moods: ['energetic', 'upbeat'] },
+]
+let chipSets = null, chipSetsOf = null
+function chipSongs(chip) {
+  const gg = getGenreGroups()
+  if (chipSetsOf !== gg) { chipSets = new Map(); chipSetsOf = gg }
+  if (chipSets.has(chip.id)) return chipSets.get(chip.id)
+  const set = new Set()
+  for (const id of chip.genres || []) for (const s of gg.map.get(id)?.songs || []) set.add(s.path)
+  for (const s of allSongs) {
+    if (set.has(s.path)) continue
+    if (chip.tags && s.tagVec && chip.tags.some(t => (s.tagVec.get(t) || 0) >= 0.1)) { set.add(s.path); continue }
+    const af = audioFeat.get(s.path)
+    if (!af) continue
+    if (chip.styles && (af.styles || []).some(([k, v]) => v >= 0.15 && chip.styles.some(x => x.endsWith('---') ? k.startsWith(x) : k.endsWith('---' + x)))) { set.add(s.path); continue }
+    if (chip.moods && (af.moods || []).some(([k, v]) => v >= 0.2 && chip.moods.includes(k))) set.add(s.path)
+  }
+  chipSets.set(chip.id, set)
+  return set
+}
+// Los que tienen al menos 2 canciones de la lista (y no son toda la lista), de más a menos
+function chipsFor(songs) {
+  if (songs.length < 6) return []
+  return CHIPS.map(c => { const set = chipSongs(c); return { c, n: songs.filter(s => set.has(s.path)).length } })
+    .filter(x => x.n >= 2 && x.n < songs.length).sort((a, b) => b.n - a.n).slice(0, 14).map(x => x.c)
+}
+
+// Lo que escribes en "Buscar en esta lista" y el filtro de estilo (se borran al abrir otra)
+let colSongs = [], colFilter = '', colChip = null
 function colFiltered() {
   const q = fold(colFilter).trim()
-  if (!q) return colSongs
-  const words = q.split(/\s+/)
+  const set = colChip ? chipSongs(colChip) : null
+  if (!q && !set) return colSongs
+  const words = q ? q.split(/\s+/) : []
   return colSongs.filter(s => {
+    if (set && !set.has(s.path)) return false
     const t = fold(`${s.title} ${s.artist} ${s.album}`)
     return words.every(w => t.includes(w))
   })
 }
-const noMatch = () => `Nada con "${colFilter.trim()}" aquí.`
+function renderColChips() {
+  const chips = chipsFor(colSongs)
+  if (colChip && !chips.includes(colChip)) chips.unshift(colChip)
+  $('col-chips').hidden = !chips.length
+  $('col-chips').innerHTML = chips.map(c => `<button class="chip${c === colChip ? ' active' : ''}" data-chip="${c.id}">${esc(c.name)}</button>`).join('')
+}
+$('col-chips').addEventListener('click', e => {
+  const b = e.target.closest('[data-chip]')
+  if (!b) return
+  const c = CHIPS.find(x => x.id === b.dataset.chip)
+  colChip = colChip === c ? null : c
+  viewSongs = colFiltered()
+  selectedIdx = -1
+  $('col-empty').textContent = viewSongs.length ? '' : noMatch()
+  renderColChips()
+  renderList()
+  updatePlayButtons()
+})
+const noMatch = () => colFilter.trim() ? `Nada con "${colFilter.trim()}" aquí.` : 'Nada de ese estilo aquí.'
 $('col-search').addEventListener('input', e => {
   colFilter = e.target.value
   viewSongs = colFiltered()
@@ -1439,9 +1507,10 @@ function openCollection(keepScroll = false) {
   const c = collectionFor(view)
   if (!c) { view = { name: 'home' }; renderView(); return }
   const vk = viewKey(view)
-  if (!keepScroll) { colFilter = ''; $('col-search').value = '' }
+  if (!keepScroll) { colFilter = ''; $('col-search').value = ''; colChip = null }
   colSongs = c.songs
   viewSongs = colFiltered()
+  renderColChips()
   viewTitle = c.title
   if (!keepScroll) selectedIdx = -1
 

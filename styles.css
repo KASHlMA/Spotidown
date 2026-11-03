@@ -798,3 +798,9 @@ body.is-playing .eq i { animation: eq .8s ease-in-out infinite alternate; }
 .st-card .st-max { display: none; }
 .st-lib { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .st-lib b { display: block; font-size: 22px; font-weight: 800; }
+
+/* Filtros por estilo en cada lista */
+.col-chips { display: flex; gap: 8px; padding: 0 24px 14px; overflow-x: auto; scrollbar-width: none; }
+.col-chips[hidden] { display: none; }
+.col-chips::-webkit-scrollbar { display: none; }
+.col-chips .chip { flex: none; white-space: nowrap; }
