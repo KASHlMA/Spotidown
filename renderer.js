@@ -937,6 +937,7 @@ function markSidebar() {
 }
 
 function setStatus(t) { $('lib-status').textContent = t }
+function notify(t) { setStatus(t); window.dispatchEvent(new CustomEvent('sd-notify', { detail: t })) }
 
 // ── Home ──────────────────────────────────────────────────────────────────────
 function playButton(cls) {
@@ -1484,6 +1485,53 @@ function miniRow(song, idx, isNow) {
   return li
 }
 
+// ── Fila: "Agregar a la fila" (después de las que ya agregaste) y reacomodar ─────
+const queued = new Set()   // agregadas con "Agregar a la fila" que todavía no suenan
+function addToQueue(song) {
+  if (!currentSong) { playList([song], 0, null); return }
+  if (shuffle && shuffleQueue.length) {
+    filtered.push(song)
+    let p = shufflePos + 1
+    while (p < shuffleQueue.length && queued.has(filtered[shuffleQueue[p]])) p++
+    shuffleQueue.splice(p, 0, filtered.length - 1)
+  } else {
+    let p = currentIdx + 1
+    while (p < filtered.length && queued.has(filtered[p])) p++
+    filtered.splice(p, 0, song)
+  }
+  queued.add(song)
+  notify(`Se agregó a la fila: ${song.title}`)
+  if (rightMode === 'queue') renderQueue()
+  else if (rightMode === 'np') renderNpNext()
+}
+// Mueve una canción de la fila: from/to son posiciones en lo que sigue (0 = la siguiente)
+function moveUpcoming(from, to) {
+  if (from === to) return
+  if (shuffle && shuffleQueue.length) {
+    const base = shufflePos + 1
+    const [x] = shuffleQueue.splice(base + from, 1)
+    shuffleQueue.splice(base + to, 0, x)
+  } else {
+    const base = currentIdx + 1
+    const [x] = filtered.splice(base + from, 1)
+    filtered.splice(base + to, 0, x)
+  }
+  if (rightMode === 'queue') renderQueue()
+}
+
+// ── Apagado automático: la música se pausa sola a los N minutos o al acabar la canción ──
+let sleepTimer = null   // { until, t } | { endOfSong: true }
+function setSleepTimer(min) {   // 0 = quitar, -1 = al terminar la canción
+  clearTimeout(sleepTimer?.t)
+  sleepTimer = !min ? null
+    : min < 0 ? { endOfSong: true }
+    : { until: Date.now() + min * 60000, t: setTimeout(() => { sleepTimer = null; audio.pause() }, min * 60000) }
+  notify(!min ? 'Apagado automático desactivado'
+    : min < 0 ? 'La música se apaga al terminar esta canción' : `La música se apaga en ${min} min`)
+}
+const sleepLabel = () => !sleepTimer ? '' : sleepTimer.endOfSong ? 'al terminar la canción'
+  : `en ${Math.max(1, Math.round((sleepTimer.until - Date.now()) / 60000))} min`
+
 function renderQueue() {
   const now = $('queue-now'), list = $('queue-list')
   now.innerHTML = ''
@@ -1589,6 +1637,7 @@ function loadAndPlay(idx) {
   if (idx < 0 || idx >= filtered.length) return
   currentIdx  = idx
   currentSong = filtered[idx]
+  queued.delete(currentSong)
   // Sincronizar posición en cola barajada si shuffle está activo
   if (shuffle && shuffleQueue.length) {
     const pos = shuffleQueue.indexOf(idx)
@@ -3446,7 +3495,10 @@ function rafLoop() {
 audio.addEventListener('loadedmetadata', () => {
   $('t-tot').textContent = fmtTime(getDur())
 })
-audio.addEventListener('ended', () => { if (repeatMode !== 2) nextSong() })
+audio.addEventListener('ended', () => {
+  if (sleepTimer?.endOfSong) { sleepTimer = null; return }   // apagado automático
+  if (repeatMode !== 2) nextSong()
+})
 // Últimos 15 segundos de la última canción del bloque: Nat ya va armando lo que sigue
 // (escribir y grabar la frase tarda de 3 a 8 s)
 audio.addEventListener('timeupdate', () => {
@@ -3636,16 +3688,31 @@ document.addEventListener('click', e => {
 $('np-radio').innerHTML = svg(I.radio, 18)
 $('np-radio').addEventListener('click', () => startRadio(currentSong))
 
+// Para la versión de celular (mobile-ui.js), que no ve las variables de este archivo
+window.sd = {
+  get currentSong() { return currentSong },
+  get playContext() { return playContext },
+  get shuffle() { return shuffle },
+  get lyricNow() { return curLyric >= 0 ? lyricLines[curLyric]?.text || '' : '' },
+  get sleepTimer() { return sleepTimer && sleepLabel() },
+  openSongMenu: (...a) => openSongMenu(...a), addToQueue: s => addToQueue(s),
+  moveUpcoming: (a, b) => moveUpcoming(a, b), setSleepTimer: m => setSleepTimer(m),
+  openSleepMenu: () => openSleepMenu(), toggleShuffle: () => toggleShuffle(),
+}
+
 // ── Menú contextual (clic derecho en una canción) ────────────────────────────
 const ctxMenu = $('ctx-menu')
 
 function openSongMenu(song, x, y) {
   const liked = likedPaths.has(song.path)
   const items = [
-    ['radio', 'Iniciar radio (canciones parecidas)'],
-    ['like',  liked ? 'Quitar de Tus me gusta' : 'Guardar en Tus me gusta'],
+    ['like',  liked ? 'Quitar de Tus me gusta' : 'Agregar a Tus me gusta'],
+    ['queue', 'Agregar a la fila'],
+    ['goqueue', 'Ir a la fila'],
     ...(splitArtists(song.artist).length ? [['artist', 'Ir al artista']] : []),
     ['album', 'Ir al álbum'],
+    ['radio', 'Ir a radio de la canción'],
+    ['sleep', 'Apagado automático' + (sleepTimer ? ' • ' + sleepLabel() : '')],
   ]
   const genres = (song.genres || []).map(id => GENRE_BY_ID.get(id).name).join(', ')
   ctxMenu.innerHTML = items.map(([k, t]) => `<button data-act="${k}">${esc(t)}</button>`).join('') +
@@ -3659,12 +3726,32 @@ function openSongMenu(song, x, y) {
 
 function closeMenu() { ctxMenu.hidden = true; ctxMenu._song = null }
 
+// Opciones del apagado automático (en el mismo menú)
+function openSleepMenu() {
+  const opts = [[5, '5 minutos'], [10, '10 minutos'], [15, '15 minutos'], [30, '30 minutos'],
+                [45, '45 minutos'], [60, '1 hora'], [-1, 'Al terminar la canción'],
+                ...(sleepTimer ? [[0, 'Desactivar apagado automático']] : [])]
+  ctxMenu.innerHTML = '<div class="ctx-info">Apagado automático' + (sleepTimer ? ' • ' + esc(sleepLabel()) : '') + '</div>' +
+    opts.map(([m, t]) => `<button data-sleep="${m}">${t}</button>`).join('')
+  ctxMenu._song = null
+  ctxMenu.hidden = false
+}
+ctxMenu.addEventListener('click', e => {
+  const b = e.target.closest('[data-sleep]')
+  if (!b) return
+  closeMenu()
+  setSleepTimer(+b.dataset.sleep)
+})
+
 ctxMenu.addEventListener('click', e => {
   const b = e.target.closest('[data-act]')
   const s = ctxMenu._song
   if (!b || !s) return
   closeMenu()
   if (b.dataset.act === 'radio')  startRadio(s)
+  if (b.dataset.act === 'queue')  addToQueue(s)
+  if (b.dataset.act === 'goqueue') { if (rightMode !== 'queue') setRight('queue') }
+  if (b.dataset.act === 'sleep')  openSleepMenu()
   if (b.dataset.act === 'like')   toggleLike(s)
   if (b.dataset.act === 'artist') navigate({ name: 'artist', key: splitArtists(s.artist)[0].toLowerCase() })
   if (b.dataset.act === 'album')  navigate({ name: 'album', key: albumKey(s) })
