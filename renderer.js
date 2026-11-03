@@ -16,6 +16,7 @@ const I = {
   pause:     '<path d="M5.7 3a.7.7 0 0 0-.7.7v16.6a.7.7 0 0 0 .7.7h2.6a.7.7 0 0 0 .7-.7V3.7a.7.7 0 0 0-.7-.7H5.7zm10 0a.7.7 0 0 0-.7.7v16.6a.7.7 0 0 0 .7.7h2.6a.7.7 0 0 0 .7-.7V3.7a.7.7 0 0 0-.7-.7h-2.6z"/>',
   note:      '<path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/>',
   person:    '<path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z"/>',
+  folder:    '<path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/>',
   disc:      '<path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 14.5a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9zm0-5.5a1 1 0 1 0 0 2 1 1 0 0 0 0-2z"/>',
   search:    '<path d="M10.5 3a7.5 7.5 0 0 1 5.96 12.05l4.25 4.24-1.42 1.42-4.24-4.25A7.5 7.5 0 1 1 10.5 3zm0 2a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11z"/>',
   heart:     '<path d="M16.5 3c-1.74 0-3.41.81-4.5 2.09C10.91 3.81 9.24 3 7.5 3 4.42 3 2 5.42 2 8.5c0 3.78 3.4 6.86 8.55 11.54L12 21.35l1.45-1.32C18.6 15.36 22 12.28 22 8.5 22 5.42 19.58 3 16.5 3zm-4.4 15.55-.1.1-.1-.1C7.14 14.24 4 11.39 4 8.5 4 6.5 5.5 5 7.5 5c1.54 0 3.04.99 3.57 2.36h1.87C13.46 5.99 14.96 5 16.5 5c2 0 3.5 1.5 3.5 3.5 0 2.89-3.14 5.74-7.9 10.05z"/>',
@@ -334,8 +335,12 @@ let groupsCache = null
 
 function getGroups() {
   if (groupsCache) return groupsCache
-  const artists = new Map(), albums = new Map()
+  const artists = new Map(), albums = new Map(), folders = new Map()
   for (const s of allSongs) {
+    // Carpeta donde está la canción (muchos las usan como playlists)
+    const dir = s.path.replace(/[\\/][^\\/]*$/, '')
+    if (!folders.has(dir)) folders.set(dir, { kind: 'folder', key: dir, name: folderName(s), songs: [] })
+    folders.get(dir).songs.push(s)
     const names = splitArtists(s.artist)
     for (const n of (names.length ? names : ['Artista desconocido'])) {
       const k = n.toLowerCase()
@@ -349,9 +354,10 @@ function getGroups() {
   const UNKNOWN = 'artista desconocido'
   const byName = (a, b) => (a.key === UNKNOWN) - (b.key === UNKNOWN) || a.name.localeCompare(b.name)
   groupsCache = {
-    artists, albums,
+    artists, albums, folders,
     artistList: [...artists.values()].sort(byName),
     albumList:  [...albums.values()].sort(byName),
+    folderList: [...folders.values()].sort((a, b) => a.name.localeCompare(b.name)),
   }
   return groupsCache
 }
@@ -941,6 +947,10 @@ function renderSidebar() {
   }
 
   const g = getGroups()
+  // Carpetas (como playlists): en "Todo" van antes de los artistas
+  if (libFilter === 'all' || libFilter === 'folder')
+    g.folderList.forEach(f => add(`folder:${f.key}`, { name: 'folder', key: f.key }, f.name, `Carpeta • ${nSongs(f.songs.length)}`,
+      th => fillMosaic(th, `folder:${f.key}`, f.songs, [70, 70, 70])))
   if (libFilter === 'all' || libFilter === 'artist')
     g.artistList.forEach(a => add(`artist:${a.key}`, { name: 'artist', key: a.key }, a.name, 'Artista',
       th => fillCover(th, a.songs, I.person), true))
@@ -1374,6 +1384,10 @@ function collectionFor(v) {
     case 'album': {
       const a = g.albums.get(v.key)
       return a && { type: 'Álbum', title: a.name, sub: a.artist, songs: a.songs, icon: I.disc }
+    }
+    case 'folder': {
+      const f = g.folders.get(v.key)
+      return f && { type: 'Carpeta', title: f.name, songs: f.songs, mosaic: `folder:${f.key}`, color: [70, 70, 70] }
     }
     case 'genre': {
       const x = getGenreGroups().map.get(v.key)
