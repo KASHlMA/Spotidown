@@ -2793,6 +2793,7 @@ const djAudio = $('dj-voice')
 function speak(text, file, onNearEnd, { keepDuck = false } = {}) {
   return new Promise(resolve => {
     let done = false, near = false
+    const my = ++voiceSeq
     const nearEnd = () => { if (!near) { near = true; onNearEnd?.() } }
     const finish = () => {
       if (done) return
@@ -2800,8 +2801,10 @@ function speak(text, file, onNearEnd, { keepDuck = false } = {}) {
       clearTimeout(guard)
       djAudio.ontimeupdate = null
       nearEnd()
-      dj.speaking = false
-      if (!keepDuck) duck(false)
+      if (my === voiceSeq) {
+        dj.speaking = false
+        if (!keepDuck) duck(false)
+      }
       renderDjPanel()
       resolve()
     }
@@ -2839,6 +2842,13 @@ audioCtx.createMediaElementSource(djAudio).connect(voiceOut)
 const voiceStreams = new Map()
 let streamSeq = 0
 let activeStream = null
+// Turno de habla del DJ: al iniciar, pedirle algo o pasar a otro bloque se toma un turno nuevo y lo
+// del turno anterior ya no suena ni pone su playlist (antes, si le escribías mientras preparaba lo
+// del arranque, hablaban los dos: tu respuesta salía con la voz del celular, luego llegaba la frase
+// vieja y se quedaba trabado en "A continuación")
+let djTurn = 0
+// La última voz que empezó es la que, al terminar, quita "hablando" y sube la música
+let voiceSeq = 0
 api.onDjChunk((id, b64) => voiceStreams.get(id)?.(b64))
 
 function streamVoice(id, { onFirst, onNearEnd, after }) {
@@ -2884,22 +2894,26 @@ function streamVoice(id, { onFirst, onNearEnd, after }) {
     feed,
     started: () => next > 0 || pending.length > 0,
     end: () => { ended = true; check(); return done.finally(stop) },
-    cancel: () => { cancelled = true; pending.length = 0; for (const s of sources) try { s.stop() } catch {} ; stop(); resolveDone() },
+    ids: [],
+    cancel() { cancelled = true; pending.length = 0; for (const s of sources) try { s.stop() } catch {} ; for (const id of this.ids) api.djCancel?.(id); stop(); resolveDone() },
   }
 }
 
 // Dice `text` al instante con la voz de Nat (en vivo). Dalia se genera en paralelo: si Google
 // no manda audio, entra ella sin otra espera. Sin Gemini, directo a la voz de respaldo.
-async function speakLive(text, onNearEnd, after) {
-  if (!dj.ai) { const file = await djVoice(text); await after; return speak(text, file, onNearEnd) }
+async function speakLive(text, onNearEnd, after, turn = djTurn) {
+  if (!dj.ai) { const file = await djVoice(text); await after; if (turn !== djTurn) return; return speak(text, file, onNearEnd) }
   const dalia = api.djSay(text, 'dalia')
   let near = false
   const nearEnd = () => { if (!near) { near = true; onNearEnd?.() } }
+  let my = 0
   const player = streamVoice(null, {
-    onFirst: () => { dj.thinking = false; dj.speaking = true; duck(true); djSay(text) },
+    onFirst: () => { my = ++voiceSeq; dj.thinking = false; dj.speaking = true; duck(true); djSay(text) },
     onNearEnd: nearEnd,
     after,
   })
+  if (turn !== djTurn) { player.cancel(); return }
+  activeStream?.cancel()   // (lo que estuviera sonando de antes se calla)
   activeStream = player
   const t0 = Date.now()
   // Google a veces manda el texto pero no el audio: se intenta otra vez (con dos intentos a la
@@ -2913,8 +2927,7 @@ async function speakLive(text, onNearEnd, after) {
   if (player.started()) {
     await player.end()
     nearEnd()
-    dj.speaking = false
-    duck(false)
+    if (my === voiceSeq) { dj.speaking = false; duck(false) }
     renderDjPanel()
     return
   }
@@ -2922,6 +2935,7 @@ async function speakLive(text, onNearEnd, after) {
   // No sonó nada: estaba en caché (archivo) o Google no mandó audio (Dalia ya está lista)
   const file = r.ok?.file || (await dalia).ok || null
   await after
+  if (turn !== djTurn) return
   dj.thinking = false
   return speak(text, file, onNearEnd)
 }
@@ -2935,6 +2949,7 @@ function raceVoice(text, player) {
     const launch = () => {
       const id = ++streamSeq
       ids.push(id)
+      player.ids?.push(id)
       pending++
       voiceStreams.set(id, b64 => {
         if (winner == null) { winner = id; for (const o of ids) if (o !== id) api.djCancel?.(o) }
@@ -2963,6 +2978,7 @@ function djSay(text) { dj.log.push({ who: 'dj', text }); dj.log = dj.log.slice(-
 // prepara qué decir) y cuando está por terminar entra la primera canción desde abajo.
 // after: algo que está sonando antes (el saludo grabado); la frase entra al terminar
 async function djPlay(block, prepared, after) {
+  const turn = ++djTurn
   dj.on = true
   dj.sameVibe = dj.vibe?.key === block.vibe.key ? dj.sameVibe + 1 : 0
   for (const s of block.songs) dj.used.add(songKey(s))
@@ -2979,6 +2995,7 @@ async function djPlay(block, prepared, after) {
   dj.thinking = !ready
   renderDjPanel()
   const line = prepared?.line ?? await djLine(block.kind, block, { urgent: true })
+  if (turn !== djTurn) return   // mientras pensaba le pediste otra cosa: eso manda
   if (block.timed) dj.sinceHello = 0
   if (!dj.on) { dj.thinking = false; renderDjPanel(); return }
   let started = false
@@ -2988,8 +3005,9 @@ async function djPlay(block, prepared, after) {
     playList(block.songs, 0, DJ_CTX)   // entra bajita (la voz la tiene agachada) y sube al terminar
   }
   // Preparada (siguiente bloque): suena de inmediato. Si no, en vivo.
-  if (ready) { await after; dj.thinking = false; await speak(line, prepared.file, startMusic) }
-  else await speakLive(line, startMusic, after)
+  if (ready) { await after; if (turn !== djTurn) return; dj.thinking = false; await speak(line, prepared.file, startMusic) }
+  else await speakLive(line, startMusic, after, turn)
+  if (turn !== djTurn) return
   startMusic()
   setTimeout(() => { if (dj.on && playContext === DJ_CTX) djPrepare(blockLeftMs()) }, 40000)
   prepareAlt()
@@ -3307,6 +3325,7 @@ function prepareAlt() {
 }
 
 function djStop() {
+  djTurn++
   dj.on = false
   djQueued = null
   dj.next = null
@@ -3566,6 +3585,9 @@ async function poolFromPlan(plan) {
 async function djAsk(text) {
   text = text.trim()
   if (!text) return
+  djTurn++
+  activeStream?.cancel()
+  activeStream = null
   dj.quietUntil = Date.now() + 60000
   dj.log.push({ who: 'yo', text })
   api.djChatLog('Tú', text)
