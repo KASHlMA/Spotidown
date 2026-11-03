@@ -3188,9 +3188,11 @@ function voiceLevel() {
   for (let i = 0; i < orbBuf.length; i++) sum += orbBuf[i] * orbBuf[i]
   return Math.min(1, Math.sqrt(sum / orbBuf.length) * 5)
 }
+// El orbe se ve en el panel del DJ, y en el celular también grande en Reproduciendo mientras Nat habla
+const orbVisible = () => rightMode === 'dj' || document.body.classList.contains('m-dj-talk')
 function drawOrb(now) {
   orb.raf = 0
-  if (rightMode !== 'dj') return
+  if (!orbVisible()) return
   const dt = Math.min(0.05, (now - (orb.last || now)) / 1000)
   orb.last = now
   const cv = orb.cv, dpr = window.devicePixelRatio || 1
@@ -3232,7 +3234,7 @@ function drawOrb(now) {
   g.globalCompositeOperation = 'source-over'
   orb.raf = requestAnimationFrame(drawOrb)
 }
-function startOrb() { if (!orb.raf && rightMode === 'dj') orb.raf = requestAnimationFrame(drawOrb) }
+function startOrb() { if (!orb.raf && orbVisible()) orb.raf = requestAnimationFrame(drawOrb) }
 
 $('dj-start').addEventListener('click', () => dj.on ? djStop() : djStart())
 $('dj-switch').addEventListener('click', djSwitch)
@@ -3707,6 +3709,9 @@ window.sd = {
   openSongMenu: (...a) => openSongMenu(...a), addToQueue: s => addToQueue(s),
   moveUpcoming: (a, b) => moveUpcoming(a, b), setSleepTimer: m => setSleepTimer(m),
   openSleepMenu: () => openSleepMenu(), toggleShuffle: () => toggleShuffle(),
+  get dj() { return { on: dj.on, ai: dj.ai, speaking: dj.speaking, thinking: dj.thinking, vibe: dj.vibe?.name || '' } },
+  djStart: () => djStart(), djStop: () => djStop(), djSwitch: () => djSwitch(), djAsk: t => djAsk(t),
+  startOrb: () => startOrb(),
 }
 
 // ── Menú contextual (clic derecho en una canción) ────────────────────────────
