@@ -3665,7 +3665,13 @@ $('btn-fwd').addEventListener('click',  goForward)
 
 $('col-play').addEventListener('click',        playCurrentView)
 $('col-sticky-play').addEventListener('click', playCurrentView)
-$('col-shuffle').addEventListener('click',     toggleShuffle)
+// Aleatorio de la página: si no está sonando esta lista, la arranca en aleatorio (como Spotify);
+// si ya está sonando, sólo prende o apaga el modo aleatorio
+$('col-shuffle').addEventListener('click', () => {
+  if (playContext?.key === viewKey(view) && currentSong) { toggleShuffle(); return }
+  if (!shuffle) toggleShuffle()
+  playList(viewSongs, null, { key: viewKey(view), title: viewTitle })
+})
 
 document.querySelectorAll('.sb-chips .chip').forEach(chip => {
   chip.addEventListener('click', () => {
@@ -3694,6 +3700,9 @@ window.sd = {
   get playContext() { return playContext },
   get shuffle() { return shuffle },
   get lyricNow() { return curLyric >= 0 ? lyricLines[curLyric]?.text || '' : '' },
+  get lyricLines() { return lyricLines },   // [{ time, text }] si la letra trae tiempos
+  get lyricIdx() { return curLyric },
+  get allSongs() { return allSongs },
   get sleepTimer() { return sleepTimer && sleepLabel() },
   openSongMenu: (...a) => openSongMenu(...a), addToQueue: s => addToQueue(s),
   moveUpcoming: (a, b) => moveUpcoming(a, b), setSleepTimer: m => setSleepTimer(m),
