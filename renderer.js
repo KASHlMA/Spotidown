@@ -1057,7 +1057,7 @@ function buildHome() {
 
   const recents = recentPaths.map(p => songByPath.get(p)).filter(Boolean)
   const tiles = [
-    { title: 'DJ Nat', cls: 'tile-dj', html: '<span>DJ</span>',
+    { title: 'DJ Nat', cls: 'tile-dj', html: '<span class="mini-orb"><i></i><i></i><i></i></span><b>DJ</b>',
       open: () => { if (rightMode !== 'dj') setRight('dj') }, play: () => djStart() },
     { title: 'Tus me gusta', cls: 'tile-liked', icon: I.heartFill,
       open: () => navigate({ name: 'liked' }), play: () => playList(likedSongs(), null, LIKED_CTX) },
@@ -1380,11 +1380,34 @@ function setHeroColor(css) {
   $('view-collection').style.setProperty('--hero', css)
 }
 
+// Lo que escribes en "Buscar en esta lista" (se borra al abrir otra)
+let colSongs = [], colFilter = ''
+function colFiltered() {
+  const q = fold(colFilter).trim()
+  if (!q) return colSongs
+  const words = q.split(/\s+/)
+  return colSongs.filter(s => {
+    const t = fold(`${s.title} ${s.artist} ${s.album}`)
+    return words.every(w => t.includes(w))
+  })
+}
+const noMatch = () => `Nada con "${colFilter.trim()}" aquí.`
+$('col-search').addEventListener('input', e => {
+  colFilter = e.target.value
+  viewSongs = colFiltered()
+  selectedIdx = -1
+  if (colSongs.length) $('col-empty').textContent = viewSongs.length ? '' : noMatch()
+  renderList()
+  updatePlayButtons()
+})
+
 function openCollection(keepScroll = false) {
   const c = collectionFor(view)
   if (!c) { view = { name: 'home' }; renderView(); return }
   const vk = viewKey(view)
-  viewSongs = c.songs
+  if (!keepScroll) { colFilter = ''; $('col-search').value = '' }
+  colSongs = c.songs
+  viewSongs = colFiltered()
   viewTitle = c.title
   if (!keepScroll) selectedIdx = -1
 
@@ -1417,7 +1440,7 @@ function openCollection(keepScroll = false) {
     }))
   }
 
-  $('col-empty').textContent = c.songs.length ? '' : (c.empty || 'No hay canciones aquí.')
+  $('col-empty').textContent = c.songs.length ? (viewSongs.length ? '' : noMatch()) : (c.empty || 'No hay canciones aquí.')
   $('col-actions').hidden = !c.songs.length
   $('track-head').hidden  = !c.songs.length
   if (!keepScroll) colScroll.scrollTop = 0
