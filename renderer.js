@@ -1455,6 +1455,33 @@ function chipSongs(chip) {
   chipSets.set(chip.id, set)
   return set
 }
+// El DJ también los usa: los estilos "de sonido" pueden ser una vibra completa y los de ánimo
+// (Chill, Lentos…) se combinan con un género, como los moods. Latino, Corridos, Cumbia y Reggaetón
+// no, porque ya son géneros de la app.
+const CHIP_AS_GENRE = new Set(['latino', 'corridos', 'cumbia', 'reggaeton'])
+const CHIP_MOODLIKE = new Set(['chill', 'serenidad', 'lentos', 'energetica'])
+const CHIP_COLOR = { sierreno: [140, 90, 50], banda: [200, 140, 30], norteno: [60, 110, 70], electropop: [160, 60, 200],
+  poprock: [200, 70, 70], indie: [60, 130, 140], folk: [120, 110, 60], beats: [90, 90, 120], sofis: [150, 110, 70],
+  chill: [60, 120, 170], serenidad: [90, 140, 160], lentos: [130, 60, 110], energetica: [220, 90, 30] }
+let styleCache = null, styleCacheOf = null
+function styleGroups() {
+  const gg = getGenreGroups()
+  if (styleCacheOf === gg && styleCache) return styleCache
+  const list = CHIPS.filter(c => !CHIP_AS_GENRE.has(c.id)).map(c => {
+    const set = chipSongs(c)
+    return { key: 's-' + c.id, name: c.name, songs: allSongs.filter(x => set.has(x.path)), color: CHIP_COLOR[c.id] || [90, 90, 90],
+      style: true, mood: CHIP_MOODLIKE.has(c.id), tags: c.tags || [], alias: [c.name] }
+  })
+  styleCache = { list, map: new Map(list.map(g => [g.key, g])) }
+  styleCacheOf = gg
+  return styleCache
+}
+// Un género, mood o estilo por su id (lo que manda la IA o lo que guarda una vibra)
+const vibeGroup = id => getGenreGroups().map.get(id) || styleGroups().map.get(id)
+// Género "de verdad" de una vibra (para no mezclar en un bloque rolas de otro género principal);
+// los estilos no tienen: juntan canciones de varios géneros
+const vibeGenre = key => { const g = key.split('+')[0]; return GENRE_BY_ID.has(g) ? g : null }
+
 // Los que tienen al menos 2 canciones de la lista (y no son toda la lista), de más a menos
 function chipsFor(songs) {
   if (songs.length < 6) return []
@@ -2382,12 +2409,14 @@ function pickVibe(exclude = [], avoid = [], uniform = false) {
   // Se excluye por género: "merengue+m-bailar" también excluye "merengue" (si no, "cambiar
   // de vibra" podía pasar de merengue a merengue)
   const excludeGenres = exclude.map(k => k.split('+')[0])
-  const genres = gg.genres.filter(g => g.songs.length >= 8 && !excludeGenres.includes(g.key))
+  const st = styleGroups().list
+  const genres = [...gg.genres, ...st.filter(x => !x.mood)].filter(g => g.songs.length >= 8 && !excludeGenres.includes(g.key))
   if (!genres.length) return null
+  // (un estilo pesa un poco menos que un género: si no, salían muy seguido porque se enciman)
   const genre = uniform ? genres[Math.floor(Math.random() * genres.length)] : weightedPick(genres, g => score(g.songs) * timeBoost(g.key) *
-    (dj.played.has(g.key) ? 0.05 : 1) * (avoid.includes(g.key) ? 0.2 : 1))
+    (dj.played.has(g.key) ? 0.05 : 1) * (avoid.includes(g.key) ? 0.2 : 1) * (g.style ? 0.7 : 1))
   const inGenre = new Set(genre.songs)
-  const combos = gg.moods.map(m => ({ m, songs: m.songs.filter(s => inGenre.has(s)) })).filter(c => c.songs.length >= 6)
+  const combos = [...gg.moods, ...st.filter(x => x.mood)].map(m => ({ m, songs: m.songs.filter(s => inGenre.has(s)) })).filter(c => c.songs.length >= 6)
   // Con mood la mitad de las veces, o casi siempre si la hora pide uno (noche → triste…)
   if (combos.length && Math.random() < 0.5 + 0.2 * Math.max(...combos.map(c => timeBoost(c.m.key) - 1))) {
     const c = weightedPick(combos, c => score(c.songs) * timeBoost(c.m.key))
@@ -2966,7 +2995,7 @@ async function djPlay(block, prepared, after) {
 
 function startBlock(kind) {
   const vibe = startVibe()
-  return vibe && { kind, vibe, songs: buildBlock(vibe.songs, 5, vibe.key.split('+')[0]) }
+  return vibe && { kind, vibe, songs: buildBlock(vibe.songs, 5, vibeGenre(vibe.key)) }
 }
 
 // Siguiente bloque: sigue con la misma vibra (hasta 2 bloques o hasta que se acaben sus
@@ -2976,7 +3005,7 @@ async function continueBlock() {
   const v = dj.vibe
   if (v?.songs && dj.sameVibe < 1) {
     const pool = v.songs.filter(s => !dj.used.has(songKey(s)))
-    if (pool.length >= 5) return { kind: 'continue', vibe: v, songs: buildBlock(pool, 5, v.key.split('+')[0]) }
+    if (pool.length >= 5) return { kind: 'continue', vibe: v, songs: buildBlock(pool, 5, vibeGenre(v.key)) }
   }
   const seed = currentSong
   if (seed) {
@@ -2992,7 +3021,7 @@ async function continueBlock() {
 
 function newBlock(kind, exclude = []) {
   const vibe = pickVibe(exclude)
-  return vibe && { kind, vibe, songs: buildBlock(vibe.songs, 5, vibe.key.split('+')[0]) }
+  return vibe && { kind, vibe, songs: buildBlock(vibe.songs, 5, vibeGenre(vibe.key)) }
 }
 
 let userName    = load('userName', '')
@@ -3391,7 +3420,7 @@ const REQ_SCHEMA = {
   properties: {
     reply:      { type: 'string', description: 'Lo que DJ Nat le contesta al usuario en voz alta: 2 o 3 frases con plática' },
     title:      { type: 'string', description: 'Nombre corto de la vibra que vas a poner' },
-    genres:     { type: 'array', items: { type: 'string' }, description: 'ids de géneros a incluir' },
+    genres:     { type: 'array', items: { type: 'string' }, description: 'ids de géneros o estilos a incluir' },
     moods:      { type: 'array', items: { type: 'string' }, description: 'ids de moods a incluir' },
     exclude:    { type: 'array', items: { type: 'string' }, description: 'ids de géneros o moods a evitar' },
     artists:    { type: 'array', items: { type: 'string' }, description: 'artistas a incluir, escritos igual que en la lista' },
@@ -3437,7 +3466,9 @@ function catalogText(text = '') {
   const artists = getGroups().artistList.filter(a => a.name !== 'Artista desconocido')
     .sort((a, b) => b.songs.length - a.songs.length).slice(0, 150).map(a => a.name).join(', ')
   const named = mentionedArtists(text)
-  return `Géneros y moods disponibles (id, nombre, canciones): ${groups}\nArtistas del usuario: ${artists}` +
+  const styles = styleGroups().list.filter(g => g.songs.length >= 5).map(g => `${g.key} (${g.name}${g.mood ? ', de ánimo' : ''}, ${g.songs.length})`).join('; ')
+  return `Géneros y moods disponibles (id, nombre, canciones): ${groups}\n` +
+    `Estilos (se usan como géneros en genres; los "de ánimo" van mejor en moods): ${styles}\nArtistas del usuario: ${artists}` +
     (named.length ? `\nArtistas que mencionó (están en su biblioteca): ${named.join(', ')}` : '')
 }
 
@@ -3446,11 +3477,19 @@ function keywordPlan(text) {
   const f = fold(text)
   const [main, ...rest] = f.split(/\b(?:sin|nada de|menos|no quiero)\b/)
   const gg = getGenreGroups()
-  const groups = [...gg.genres, ...gg.moods]
-  const mentions = seg => groups.filter(g => [g.name, ...(g.alias || []), ...g.tags].some(t => {
+  const groups = [...gg.genres, ...gg.moods, ...styleGroups().list]
+  const hits = (g, seg) => [g.name, ...(g.alias || []), ...g.tags].filter(t => {
     const ft = fold(t)
-    return ft.length >= 4 && new RegExp(`\\b${ft.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(seg)
-  }))
+    // (también en plural: "cumbias", "sierreños")
+    return ft.length >= 4 && new RegExp(`\\b${ft.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:s|es)?\\b`).test(seg)
+  }).map(t => fold(t))
+  // Si la palabra es de un estilo ("norteño", "banda"), cuenta el estilo y no el género que también
+  // la trae entre sus etiquetas (si no, "sin banda" quitaba todo el regional mexicano)
+  const mentions = seg => {
+    const found = groups.map(g => ({ g, h: hits(g, seg) })).filter(x => x.h.length)
+    const styleWords = new Set(found.filter(x => x.g.style).flatMap(x => x.h))
+    return found.filter(x => x.g.style || x.h.some(w => !styleWords.has(w))).map(x => x.g)
+  }
   const like = /\b(?:como|tipo|estilo)\s+(?:de\s+)?(.+)$/.exec(main)
   const head = like ? main.slice(0, like.index) : main
   const inc = mentions(head)
@@ -3472,10 +3511,17 @@ function keywordPlan(text) {
 
 async function poolFromPlan(plan) {
   const gg = getGenreGroups()
-  const songsOf = ids => new Set((ids || []).flatMap(id => gg.map.get(id)?.songs || []))
-  const known = id => gg.map.has(id)
+  const songsOf = ids => new Set((ids || []).flatMap(id => vibeGroup(id)?.songs || []))
+  const known = id => !!vibeGroup(id)
   let pool = null
-  const g = songsOf((plan.genres || []).filter(known)), m = songsOf((plan.moods || []).filter(known))
+  let g = songsOf((plan.genres || []).filter(known))
+  const m = songsOf((plan.moods || []).filter(known))
+  // Género + estilo ("corridos sierreños"): las que son las dos cosas, si alcanzan
+  const gIds = (plan.genres || []).filter(known), realG = gIds.filter(id => !id.startsWith('s-')), styleG = gIds.filter(id => id.startsWith('s-'))
+  if (realG.length && styleG.length) {
+    const st = songsOf(styleG), both = new Set([...songsOf(realG)].filter(s => st.has(s)))
+    if (both.size >= 5) g = both
+  }
   if (g.size) pool = g
   if (m.size) {
     const both = pool ? new Set([...pool].filter(s => m.has(s))) : m
@@ -3510,7 +3556,9 @@ async function poolFromPlan(plan) {
   }
   if (!pool) return []
   const ex = new Set((plan.exclude || []).filter(known))
-  return [...pool].filter(s => !(s.genres || []).some(id => ex.has(id)))
+  // ("sin banda": los estilos no están en s.genres, se quitan por sus canciones)
+  const exStyles = [...ex].map(id => styleGroups().map.get(id)).filter(Boolean).map(g => new Set(g.songs))
+  return [...pool].filter(s => !(s.genres || []).some(id => ex.has(id)) && !exStyles.some(set => set.has(s)))
 }
 
 async function djAsk(text) {
