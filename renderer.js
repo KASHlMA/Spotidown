@@ -270,6 +270,7 @@ function coverColor(dataUrl) {
   if (colorCache.has(dataUrl)) return Promise.resolve(colorCache.get(dataUrl))
   return new Promise(resolve => {
     const tmp = new Image()
+    if (/^https?:/.test(dataUrl) && !dataUrl.startsWith(location.origin)) tmp.crossOrigin = 'anonymous'
     tmp.onload = () => {
       const size = 48
       const c  = document.createElement('canvas')
@@ -277,15 +278,32 @@ function coverColor(dataUrl) {
       const cx = c.getContext('2d')
       cx.drawImage(tmp, 0, 0, size, size)
       const px = cx.getImageData(0, 0, size, size).data
-      let best = -1, col = [83, 83, 83]
+      // El color que más ocupa la portada (antes: el pixel más llamativo, y un detalle chiquito,
+      // como un logo rojo en una portada oscura, pintaba todo el fondo de un color que no le quedaba).
+      // Se agrupan los pixeles por tono; los grises cuentan aparte, y los colores vivos pesan un poco más.
+      const bins = new Map()
       for (let i = 0; i < px.length; i += 4) {
         const r = px[i], g = px[i + 1], b = px[i + 2]
         const max = Math.max(r, g, b), min = Math.min(r, g, b)
-        if (max < 40 || max > 240) continue
+        if (max < 28 || min > 235) continue   // casi negro o casi blanco: no dice nada del color
         const l = (max + min) / 510
         const s = max === min ? 0 : (max - min) / (255 * (1 - Math.abs(2 * l - 1)))
-        const score = s * (1 - Math.abs(l - 0.55))
-        if (score > best) { best = score; col = [r, g, b] }
+        let key = 'gray'
+        if (s > 0.18) {
+          const d = max - min
+          let h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4
+          h = (h * 60 + 360) % 360
+          key = Math.round(h / 24) % 15
+        }
+        const w = 1 + s * 1.5
+        const bin = bins.get(key) || { w: 0, r: 0, g: 0, b: 0 }
+        bin.w += w; bin.r += r * w; bin.g += g * w; bin.b += b * w
+        bins.set(key, bin)
+      }
+      let col = [83, 83, 83], best = 0
+      for (const [key, bin] of bins) {
+        const score = bin.w * (key === 'gray' ? 0.55 : 1)
+        if (score > best) { best = score; col = [bin.r, bin.g, bin.b].map(v => Math.round(v / bin.w)) }
       }
       colorCache.set(dataUrl, col)
       resolve(col)
@@ -1428,6 +1446,9 @@ function openCollection(keepScroll = false) {
   if (c.mosaic) {
     fillMosaic(cv, c.mosaic, c.songs, c.color)
     setHeroColor(tone(c.color, 0.32))
+    // (luego, el color que más tienen sus portadas: el fijo a veces no combinaba con ellas)
+    const first = c.songs.find(s => s.cover)
+    if (first) coverColor(first.cover).then(col => { if (viewKey(view) === vk) setHeroColor(tone(col, 0.32)) })
   } else if (c.tile) {
     lazyObs.unobserve(cv)
     cv.classList.add(c.tile)
@@ -3855,6 +3876,8 @@ $('np-radio').addEventListener('click', () => startRadio(currentSong))
 
 // Para la versión de celular (mobile-ui.js), que no ve las variables de este archivo
 window.sd = {
+  // El color de fondo de la página sacado de una imagen (la foto del artista en el celular)
+  heroFromImage: src => { const vk = viewKey(view); coverColor(src).then(col => { if (viewKey(view) === vk) setHeroColor(tone(col, 0.32)) }) },
   get currentSong() { return currentSong },
   get playContext() { return playContext },
   get shuffle() { return shuffle },
