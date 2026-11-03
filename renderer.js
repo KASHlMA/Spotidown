@@ -2213,6 +2213,10 @@ function blockFacts(block) {
 const DJ_SYSTEM =
   'Eres la voz que presenta la música en el reproductor personal del usuario, como una locutora de radio mexicana ' +
   'joven: cálida, carismática y con jerga mexicana natural, sin exagerar. ' +
+  'Tu personalidad: divertida y un poco chismosa, le echas carrilla al usuario con cariño, tienes opiniones ' +
+  'de la música (te emocionas con las rolas que te laten), haces referencias a la vida diaria en México ' +
+  '(el tráfico, los tacos, la quincena, el calor, la desvelada), te ríes de ti misma y a veces eres coqueta ' +
+  'pero respetuosa. Suenas a amiga, no a anuncio. ' +
   'Te llamas DJ Nat. Reglas: de 1 a 3 frases y máximo 32 palabras; platica como en la radio, no sólo anuncies la rola. Se escribe "rola" (con una sola ele). ' +
   'NO te presentes ni digas tu nombre (nada de "soy DJ Nat", "aquí tu…") salvo que la tarea lo pida. NO saludes ni digas la hora o el día, salvo que la tarea lo pida. Ve directo a la música. ' +
   'Usa sólo los datos que te dan; no inventes canciones, artistas ni datos. Sin emojis, comillas, asteriscos, ' +
@@ -2250,7 +2254,7 @@ const DJ_ANGLES = [
   'Empieza directo con el nombre de la rola o del artista y luego un comentario.',
   'Usa un tono de locutora que anuncia algo especial: "atención", "ojo", "aguas"…',
   'Hazlo cortito y con punch: una sola frase.',
-  'Ponle un toque de humor con un dicho o refrán mexicano.',
+  'Ponle un toque de humor con un dicho o refrán mexicano: DICHO.',
   'Cuéntalo como chisme: "te tengo una"…',
   'Dilo como si la rola fuera un regalo que le tenías guardado.',
   'Haz como que la rola te encanta a ti también y por qué.',
@@ -2278,7 +2282,17 @@ const DJ_SLANG = ['qué chido', 'está cañón', 'aguas', 'sale y vale', 'no man
   'esta sí', 'te va a gustar', 'pa los compas', 'ni cómo ayudarte', 'de las buenas', 'sin pena', 'bien recio',
   'a todo volumen', 'pa la banda', 'está de poca', 'qué onda con esta', 'joya', 'qué viaje', 'bien prendido',
   'pa que se te quite lo aguado', 'como debe ser', 'directo al corazón', 'qué rolón']
-const DJ_BANNED = '¿a poco no se antoja?, ¿a poco no?, ¿a poco no está buenísima?, se antoja, bien a gusto, ' +
+const DJ_DICHOS = ['al mal tiempo, buena cara', 'el que es perico donde quiera es verde', 'no hay mal que por bien no venga',
+  'más vale tarde que nunca', 'a darle que es mole de olla', 'de lengua me como un taco', 'el que madruga, Dios lo ayuda',
+  'echando a perder se aprende', 'hierba mala nunca muere', 'ojos que no ven, corazón que no siente',
+  'a falta de pan, tortillas', 'más vale paso que dure y no trote que canse', 'el que no arriesga no gana',
+  'genio y figura hasta la sepultura', 'como anillo al dedo', 'no hay quinto malo', 'cada quien su mole',
+  'agua que no has de beber, déjala correr', 'el amor y el interés se fueron al campo un día', 'eso es harina de otro costal',
+  'quien canta su mal espanta', 'más vale maña que fuerza', 'del plato a la boca se cae la sopa',
+  'a buen entendedor, pocas palabras', 'donde comen dos comen tres', 'no por mucho madrugar amanece más temprano',
+  'el que es buen gallo donde quiera canta', 'a otro perro con ese hueso', 'ni tanto que queme al santo ni tanto que no lo alumbre',
+  'después de la tormenta viene la calma']
+const DJ_BANNED = 'camarón que se duerme (ni ningún otro dicho que no te den), ¿a poco no se antoja?, ¿a poco no?, ¿a poco no está buenísima?, se antoja, bien a gusto, ' +
   'la neta se va a poner buena, la neta te va a encantar, va que va, arrancamos con, cambiamos de vibra, ' +
   'esta rola de X llamada Y, de hace rato, empezar con "Va", empezar con el nombre del usuario'
 let djLines = load('djLines', [])
@@ -2286,7 +2300,8 @@ let djAngleLog = []
 function djVariety() {
   const free = DJ_ANGLES.filter(a => !djAngleLog.includes(a))
   const angle = free[Math.floor(Math.random() * free.length)]
-  djAngleLog = [angle, ...djAngleLog].slice(0, 5)
+    .replace('DICHO', '"' + DJ_DICHOS[Math.floor(Math.random() * DJ_DICHOS.length)] + '"')
+  djAngleLog = [angle.replace(/: ".*"\.$/, ': DICHO.'), ...djAngleLog].slice(0, 5)
   const slang = [...DJ_SLANG].sort(() => Math.random() - 0.5).slice(0, 2)
   const opener = DJ_OPENERS[Math.floor(Math.random() * DJ_OPENERS.length)]
   return `\nEstilo de esta vez: ${angle} Empieza ${opener}. Si te late, usa alguna de estas expresiones: ${slang.join(', ')}. ` +
@@ -3190,6 +3205,9 @@ async function djAsk(text) {
       'contéstale sin saludar ni presentarte. Aquí sí cotorrea: de 2 a 3 frases (máximo 45 palabras), con ' +
       'plática de locutora (comenta su elección, échale porras, una broma o un comentario del mood)' +
       (userName ? `, y dile su nombre (${userName}) de forma natural` : '') + '. ' +
+      'Si pide música para una actividad o un momento (bañarse, cocinar, limpiar, manejar, estudiar, hacer ejercicio, ' +
+      'dormir, una fiesta, un desamor…), tú eliges los géneros y moods que le queden (ej. bañarse → algo alegre o pa ' +
+      'cantar; limpiar → con energía; dormir → tranqui); nunca dejes genres y moods vacíos. ' +
       'Si pide algo "como", "parecido a", "estilo" o "tipo" uno o varios artistas o canciones, pon TODOS esos nombres en similar_to y NO en artists; ' +
       'usa artists sólo si pide escuchar a ese artista. Si pide una o varias canciones por su nombre ("pon Gil", ' +
       '"ponme pollypocket"), ponlas en songs tal cual las escribió (con su artista si lo dijo).',
@@ -3203,10 +3221,12 @@ async function djAsk(text) {
   // Después de las pedidas, rolas que suenan parecido (si no pidió también un estilo)
   if (wanted.length && pool.length < 5) pool = await similarSongs(wanted[0])
   dj.thinking = false
+  // Si aun así no encontró nada, algo con buena vibra de tu música (nunca "no encontré")
   if (!wanted.length && pool.length < 3) {
-    const line = 'Uy, no encontré nada así en tu música. ¿Me lo pides de otra forma?'
-    await speakLive(line, undefined, after)
-    return
+    const gg = getGenreGroups()
+    const good = ['m-feliz', 'm-bailar', 'm-energia'].map(k => gg.map.get(k)).find(m => m?.songs.length >= 10)
+    pool = good ? good.songs : (pickVibe()?.songs || allSongs)
+    if (!plan.reply) plan.reply = '¡Va! Te armé algo con buena vibra de tu música.'
   }
   // "tipo Cachirula o Emi Blue": abre una rola de cada uno (de las que más escuchas) y luego parecidas
   for (const ref of [plan.similar_to || []].flat().filter(Boolean).slice(0, 2)) {
@@ -3895,7 +3915,7 @@ function openSettings() {
   $('canvas-on').checked = canvasOn
   $('lfm-msg').className = $('gem-msg').className = 'modal-msg'
   $('lfm-key').value = $('gem-key').value = ''
-  $('lfm-key').focus()
+  $('settings-adv').open = false
 }
 function closeSettings() { $('settings').hidden = true }
 
@@ -3922,7 +3942,7 @@ async function saveSettings() {
     msg.className = 'modal-msg'
     const r = await set(key)
     if (r.ok) { msg.textContent = '¡Conectado!'; after() }
-    else { ok = false; msg.textContent = r.error; msg.className = 'modal-msg err' }
+    else { ok = false; msg.textContent = r.error; msg.className = 'modal-msg err'; $('settings-adv').open = true }
   }
   $('lfm-save').disabled = false
   if (ok) closeSettings()

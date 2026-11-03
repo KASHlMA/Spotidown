@@ -308,21 +308,6 @@
   <div class="modal-back" id="settings" hidden>
     <div class="modal">
       <h2>Ajustes</h2>
-      <h3 class="modal-h3">Géneros y radio (Last.fm)</h3>
-      <p>Para saber el género y el mood de cada canción, y para armar radios con canciones parecidas, se usa <b>Last.fm</b>. Sólo necesitas una API key gratuita:</p>
-      <ol>
-        <li>Crea una cuenta en Last.fm (o inicia sesión).</li>
-        <li>Llena el formulario de "Create API account" (nombre y descripción, cualquier cosa; el resto vacío).</li>
-        <li>Copia el valor de <b>API key</b> y pégalo aquí abajo.</li>
-      </ol>
-      <button class="modal-link" id="lfm-create">Abrir last.fm/api/account/create ↗</button>
-      <input id="lfm-key" class="modal-input" type="text" placeholder="API key (32 caracteres)" spellcheck="false"/>
-      <p class="modal-msg" id="lfm-msg"></p>
-      <h3 class="modal-h3">DJ con IA (Gemini)</h3>
-      <p>Con una key gratis de Google AI Studio el DJ entiende lo que le escribes y habla con voz natural. Sin ella funciona con frases armadas.</p>
-      <button class="modal-link" id="gem-create">Abrir aistudio.google.com ↗</button>
-      <input id="gem-key" class="modal-input" type="text" placeholder="API key de Gemini" spellcheck="false"/>
-      <p class="modal-msg" id="gem-msg"></p>
       <h3 class="modal-h3">Tu DJ</h3>
       <input id="dj-name" class="modal-input modal-text" type="text" placeholder="¿Cómo te llamo?" spellcheck="false"/>
       <input id="dj-city" class="modal-input modal-text modal-gap" type="text" placeholder="Tu ciudad para el clima (ej. Cuautla, Morelos)" spellcheck="false"/>
@@ -331,6 +316,25 @@
         <span><b>Canvas</b><small>Videos cortos en loop en lugar de la carátula (usa internet)</small></span>
         <input type="checkbox" id="canvas-on"/><i></i>
       </label>
+      <!-- Las API keys van en un apartado aparte (se abre sólo si lo tocas) -->
+      <details class="modal-adv" id="settings-adv">
+        <summary>Claves de API (avanzado)</summary>
+        <h3 class="modal-h3">Géneros y radio (Last.fm)</h3>
+        <p>Para saber el género y el mood de cada canción, y para armar radios con canciones parecidas, se usa <b>Last.fm</b>. Sólo necesitas una API key gratuita:</p>
+        <ol>
+          <li>Crea una cuenta en Last.fm (o inicia sesión).</li>
+          <li>Llena el formulario de "Create API account" (nombre y descripción, cualquier cosa; el resto vacío).</li>
+          <li>Copia el valor de <b>API key</b> y pégalo aquí abajo.</li>
+        </ol>
+        <button class="modal-link" id="lfm-create">Abrir last.fm/api/account/create ↗</button>
+        <input id="lfm-key" class="modal-input" type="text" placeholder="API key (32 caracteres)" spellcheck="false"/>
+        <p class="modal-msg" id="lfm-msg"></p>
+        <h3 class="modal-h3">DJ con IA (Gemini)</h3>
+        <p>Con una key gratis de Google AI Studio el DJ entiende lo que le escribes y habla con voz natural. Sin ella funciona con frases armadas.</p>
+        <button class="modal-link" id="gem-create">Abrir aistudio.google.com ↗</button>
+        <input id="gem-key" class="modal-input" type="text" placeholder="API key de Gemini" spellcheck="false"/>
+        <p class="modal-msg" id="gem-msg"></p>
+      </details>
       <div class="modal-actions">
         <button class="btn-sec" id="lfm-cancel">Cancelar</button>
         <button class="btn-pri" id="lfm-save">Guardar</button>
