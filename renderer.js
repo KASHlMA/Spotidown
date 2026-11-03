@@ -2853,6 +2853,7 @@ api.onDjChunk((id, b64) => voiceStreams.get(id)?.(b64))
 
 function streamVoice(id, { onFirst, onNearEnd, after }) {
   let next = 0, playing = 0, ended = false, near = false, resolveDone, cancelled = false
+  let cuts = 0, maxGap = 0, t0 = 0   // cortes: un pedazo llegó cuando ya se había acabado lo anterior
   let gateOpen = !after
   const sources = [], pending = []
   const done = new Promise(r => { resolveDone = r })
@@ -2875,8 +2876,12 @@ function streamVoice(id, { onFirst, onNearEnd, after }) {
     const src = audioCtx.createBufferSource()
     src.buffer = buf
     src.connect(voiceOut)
-    // Colchón de 0.3 s al inicio por si algún pedazo llega tarde
-    const t = Math.max(next, audioCtx.currentTime + (next ? 0.02 : 0.3))
+    // Colchón al inicio por si algún pedazo llega tarde (internet lento); si aun así llegó tarde
+    // (ya se había acabado lo de antes: se oye un corte), se junta un poquito antes de seguir
+    const now = audioCtx.currentTime, late = next && now > next
+    if (late) { cuts++; maxGap = Math.max(maxGap, now - next) }
+    if (!next) t0 = Date.now()
+    const t = Math.max(next, now + (!next ? 0.45 : late ? 0.25 : 0.02))
     src.start(t)
     next = t + buf.duration
     playing++
@@ -2893,7 +2898,7 @@ function streamVoice(id, { onFirst, onNearEnd, after }) {
   return {
     feed,
     started: () => next > 0 || pending.length > 0,
-    end: () => { ended = true; check(); return done.finally(stop) },
+    end: () => { ended = true; check(); return done.finally(() => { stop(); if (next) api.djVoiceLog?.({ cuts, maxGap: Math.round(maxGap * 1000), secs: Math.round((Date.now() - t0) / 100) / 10 }) }) },
     ids: [],
     cancel() { cancelled = true; pending.length = 0; for (const s of sources) try { s.stop() } catch {} ; for (const id of this.ids) api.djCancel?.(id); stop(); resolveDone() },
   }
