@@ -979,6 +979,57 @@ function fillShelf(id, groups) {
   row.appendChild(frag)
 }
 
+// ── Mixes del día (como los "Mix diario" de Spotify): cambian cada día ─────────
+// Mismo día = mismos mixes (azar con semilla de la fecha); al día siguiente, otras canciones
+function seeded(seed) {
+  let a = 0
+  for (const c of seed) a = (a * 31 + c.charCodeAt(0)) | 0
+  return () => { a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296 }
+}
+let mixCache = null
+function dailyMixes() {
+  const day = new Date().toLocaleDateString('en-CA')
+  // Se vuelven a armar si cambia la biblioteca o llegan los géneros (al abrir la app tardan)
+  const sig = allSongs.length + '|' + getGenreGroups().genres.length
+  if (mixCache?.day === day && mixCache.sig === sig) return mixCache.mixes
+  const rnd = seeded(day)
+  const pickN = (pool, n, weight) => {
+    const out = [], left = [...new Map(pool.map(s => [songKey(s), s])).values()]
+    while (out.length < n && left.length) {
+      const ws = left.map(weight), sum = ws.reduce((a, b) => a + b, 0)
+      let r = rnd() * sum, i = 0
+      while (i < left.length - 1 && (r -= ws[i]) > 0) i++
+      out.push(left.splice(i, 1)[0])
+    }
+    return out
+  }
+  const artistsOf = songs => [...new Set(songs.flatMap(s => splitArtists(s.artist).slice(0, 1)))].slice(0, 3).join(', ')
+  const mixes = []
+  // Uno por cada género que más escuchas: tus favoritas pesan más y se cuelan algunas que casi no oyes
+  const gg = getGenreGroups()
+  const score = g => g.songs.reduce((a, s) => a + affinity(s), 0)
+  const top = [...gg.genres].filter(g => g.songs.length >= 15).sort((a, b) => score(b) - score(a)).slice(0, 6)
+  top.forEach((g, i) => {
+    const songs = pickN(g.songs, 30, s => 1 + Math.log1p(affinity(s)) * 1.5 + (plays[s.path] ? 0 : 0.6))
+    mixes.push({ kind: 'mix', key: 'g' + i, name: `Mix de ${g.name}`, songs, artist: artistsOf(songs), color: g.color })
+  })
+  const never = allSongs.filter(s => !plays[s.path])
+  if (never.length >= 10) {
+    const songs = pickN(never, 30, () => 1)
+    mixes.push({ kind: 'mix', key: 'new', name: 'Descubrimiento del día', songs, artist: 'Canciones tuyas que nunca has escuchado', color: [30, 90, 160] })
+  }
+  const back = allSongs.filter(forgotten)
+  if (back.length >= 8) {
+    const songs = pickN(back, 30, s => 1 + Math.log1p(affinity(s)))
+    mixes.push({ kind: 'mix', key: 'back', name: 'De vuelta a…', songs, artist: 'Las que te gustaban y ya no pones', color: [150, 90, 30] })
+  }
+  const t = Date.now() - 30 * 864e5
+  const recent = allSongs.filter(s => plays[s.path]?.last > t).sort((a, b) => affinity(b) - affinity(a)).slice(0, 30)
+  if (recent.length >= 10) mixes.push({ kind: 'mix', key: 'rep', name: 'Tu repetición', songs: recent, artist: 'Lo que más estás oyendo', color: [120, 30, 120] })
+  mixCache = { day, sig, mixes }
+  return mixes
+}
+
 function buildHome() {
   const h = new Date().getHours()
   $('home-greeting').textContent =
@@ -1024,6 +1075,7 @@ function buildHome() {
   const g = getGroups()
   const bySize = (a, b) => b.songs.length - a.songs.length
   const recentAlbums = [...new Set(recents.map(albumKey))].map(k => g.albums.get(k)).filter(Boolean)
+  fillShelf('home-mixes', dailyMixes())
   fillShelf('home-recent-albums', recentAlbums.slice(0, 12))
   fillGenreShelves()
   fillShelf('home-artists', g.artistList.filter(a => a.name !== 'Artista desconocido').sort(bySize).slice(0, 12))
@@ -1046,6 +1098,7 @@ function makeGenreCard(g) {
 }
 
 function fillGenreShelves() {
+  fillShelf('home-mixes', dailyMixes())   // los mixes de género necesitan los géneros
   const gg = getGenreGroups()
   for (const [id, list] of [['home-genres', gg.genres], ['home-moods', gg.moods]]) {
     const row = $(id)
@@ -1293,6 +1346,10 @@ function collectionFor(v) {
     case 'tag': {
       const st = searchMatches(v.key).style
       return st && { type: 'Estilo', title: st.name, songs: st.songs, mosaic: `tag:${st.key}`, color: st.color }
+    }
+    case 'mix': {
+      const m = dailyMixes().find(x => x.key === v.key)
+      return m && { type: 'Playlist', title: m.name, sub: m.artist, songs: m.songs, mosaic: `mix:${m.key}`, color: m.color }
     }
     case 'searchall':
       return { type: 'Canciones que coinciden con', title: v.q, songs: searchMatches(v.q).songs, icon: I.search, color: [60, 60, 60],
@@ -2156,7 +2213,7 @@ function blockFacts(block) {
 const DJ_SYSTEM =
   'Eres la voz que presenta la música en el reproductor personal del usuario, como una locutora de radio mexicana ' +
   'joven: cálida, carismática y con jerga mexicana natural, sin exagerar. ' +
-  'Te llamas DJ Nat. Reglas: de 1 a 2 frases y máximo 25 palabras. Se escribe "rola" (con una sola ele). ' +
+  'Te llamas DJ Nat. Reglas: de 1 a 3 frases y máximo 32 palabras; platica como en la radio, no sólo anuncies la rola. Se escribe "rola" (con una sola ele). ' +
   'NO te presentes ni digas tu nombre (nada de "soy DJ Nat", "aquí tu…") salvo que la tarea lo pida. NO saludes ni digas la hora o el día, salvo que la tarea lo pida. Ve directo a la música. ' +
   'Usa sólo los datos que te dan; no inventes canciones, artistas ni datos. Sin emojis, comillas, asteriscos, ' +
   'listas ni acotaciones entre paréntesis. Háblale de tú. Varía tus frases: no empieces siempre igual. ' +
@@ -2317,6 +2374,11 @@ async function djLine(kind, block, { noTime = false, urgent = false } = {}) {
     block.timed = Date.now()
   } else if (transition) {
     // De vez en cuando, algo personal o el día, para que no suene siempre igual
+    // Su nombre también entre bloques (no sólo cuando toca la hora)
+    if (userName && Math.random() < 0.45) {
+      f.nombre = userName
+      task += ' Dile su nombre de forma natural.'
+    }
     const roll = Math.random(), fact = roll < 0.3 && personalFact()
     if (fact) {
       f.dato_personal = fact
@@ -2567,12 +2629,12 @@ function startBlock(kind) {
   return vibe && { kind, vibe, songs: buildBlock(vibe.songs, 5, vibe.key.split('+')[0]) }
 }
 
-// Siguiente bloque: sigue con la misma vibra (hasta 3 bloques o hasta que se acaben sus
+// Siguiente bloque: sigue con la misma vibra (hasta 2 bloques o hasta que se acaben sus
 // canciones) y luego pasa a rolas que suenan parecido a la última. Cambiar de género es
 // cosa de "Cambiar vibra".
 async function continueBlock() {
   const v = dj.vibe
-  if (v?.songs && dj.sameVibe < 2) {
+  if (v?.songs && dj.sameVibe < 1) {
     const pool = v.songs.filter(s => !dj.used.has(songKey(s)))
     if (pool.length >= 5) return { kind: 'continue', vibe: v, songs: buildBlock(pool, 5, v.key.split('+')[0]) }
   }
@@ -2987,7 +3049,7 @@ function djSwitch() {
 const REQ_SCHEMA = {
   type: 'object',
   properties: {
-    reply:      { type: 'string', description: 'Lo que DJ Nat le contesta al usuario en voz alta (1-2 frases)' },
+    reply:      { type: 'string', description: 'Lo que DJ Nat le contesta al usuario en voz alta: 2 o 3 frases con plática' },
     title:      { type: 'string', description: 'Nombre corto de la vibra que vas a poner' },
     genres:     { type: 'array', items: { type: 'string' }, description: 'ids de géneros a incluir' },
     moods:      { type: 'array', items: { type: 'string' }, description: 'ids de moods a incluir' },
@@ -3125,7 +3187,9 @@ async function djAsk(text) {
   if (dj.ai) {
     const r = await api.djThink(
       DJ_SYSTEM + ' Ahora el usuario te pide algo: elige qué poner usando SÓLO los ids y artistas de la lista y ' +
-      'contéstale directo, sin saludar ni presentarte (ej. "¡Va! Unos corriditos pa la peda, cero reggaetón"). ' +
+      'contéstale sin saludar ni presentarte. Aquí sí cotorrea: de 2 a 3 frases (máximo 45 palabras), con ' +
+      'plática de locutora (comenta su elección, échale porras, una broma o un comentario del mood)' +
+      (userName ? `, y dile su nombre (${userName}) de forma natural` : '') + '. ' +
       'Si pide algo "como", "parecido a", "estilo" o "tipo" uno o varios artistas o canciones, pon TODOS esos nombres en similar_to y NO en artists; ' +
       'usa artists sólo si pide escuchar a ese artista. Si pide una o varias canciones por su nombre ("pon Gil", ' +
       '"ponme pollypocket"), ponlas en songs tal cual las escribió (con su artista si lo dijo).',
