@@ -3679,7 +3679,7 @@ async function scanLibrary() {
         path: p, mtime,
         title: cached.title, artist: cached.artist,
         album: cached.album, duration: cached.duration,
-        cover: null, lyrics: ''
+        cover: cached.cover || null, lyrics: ''   // (en el celular viene la carátula guardada)
       }
     }
     return {
