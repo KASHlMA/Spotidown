@@ -2842,7 +2842,7 @@ let activeStream = null
 api.onDjChunk((id, b64) => voiceStreams.get(id)?.(b64))
 
 function streamVoice(id, { onFirst, onNearEnd, after }) {
-  let next = 0, playing = 0, ended = false, near = false, resolveDone
+  let next = 0, playing = 0, ended = false, near = false, resolveDone, cancelled = false
   let gateOpen = !after
   const sources = [], pending = []
   const done = new Promise(r => { resolveDone = r })
@@ -2874,15 +2874,17 @@ function streamVoice(id, { onFirst, onNearEnd, after }) {
     src.onended = () => { playing--; check() }
   }
   // after: lo que está sonando antes (el saludo grabado); mientras, los pedazos se guardan
-  if (after) after.then(() => { gateOpen = true; for (const b of pending.splice(0)) schedule(b); check() })
-  const feed = b64 => { dj.voiceWaiting = true; gateOpen ? schedule(b64) : pending.push(b64) }
+  if (after) after.then(() => { if (cancelled) return; gateOpen = true; for (const b of pending.splice(0)) schedule(b); check() })
+  // (ya cancelada no suena nada: si la voz de Google llegaba tarde, sonaba encima de la de respaldo
+  // y se oían dos frases a la vez, brincando de una a otra)
+  const feed = b64 => { if (cancelled) return; dj.voiceWaiting = true; gateOpen ? schedule(b64) : pending.push(b64) }
   if (id != null) voiceStreams.set(id, feed)
   const stop = () => { clearInterval(timer); if (id != null) voiceStreams.delete(id) }
   return {
     feed,
     started: () => next > 0 || pending.length > 0,
     end: () => { ended = true; check(); return done.finally(stop) },
-    cancel: () => { pending.length = 0; for (const s of sources) try { s.stop() } catch {} ; stop(); resolveDone() },
+    cancel: () => { cancelled = true; pending.length = 0; for (const s of sources) try { s.stop() } catch {} ; stop(); resolveDone() },
   }
 }
 
