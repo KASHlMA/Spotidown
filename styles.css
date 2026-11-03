@@ -747,3 +747,54 @@ body.is-playing .eq i { animation: eq .8s ease-in-out infinite alternate; }
 .modal-adv summary::before { content: '▸'; transition: transform .15s; }
 .modal-adv[open] summary::before { transform: rotate(90deg); }
 .modal-adv summary::-webkit-details-marker { display: none; }
+
+/* ── Tus estadísticas ── */
+.stats-card {
+  width: 100%; display: flex; align-items: center; gap: 18px; padding: 18px 20px; border-radius: 10px; text-align: left;
+  background: linear-gradient(120deg, #3a0d14, #1f1f1f 70%); color: var(--white);
+}
+.stats-card .sc-num b { display: block; font-size: 34px; font-weight: 800; line-height: 1; }
+.stats-card .sc-num span, .stats-card .sc-txt span { display: block; font-size: 13px; color: var(--t2); margin-top: 4px; }
+.stats-card .sc-txt { font-size: 15px; }
+.stats { padding: 24px 24px 120px; max-width: 900px; }
+.st-title { font-size: 30px; font-weight: 800; margin-bottom: 14px; }
+.st-chips { display: flex; gap: 8px; margin-bottom: 20px; }
+.st-hero { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 10px; margin-bottom: 26px; }
+.st-hero > div, .st-lib > div, .st-card { background: var(--elev); border-radius: 10px; padding: 14px 16px; }
+.st-hero b { display: block; font-size: 30px; font-weight: 800; line-height: 1.1; }
+.st-hero > div:first-child b { font-size: 40px; color: var(--accent-hi); }
+.st-hero span, .st-lib span, .st-card span { display: block; font-size: 13px; color: var(--t2); margin-top: 4px; }
+.st-empty { color: var(--t2); margin: 10px 0 26px; }
+.st-sec { margin-bottom: 28px; }
+.st-sec h2 { font-size: 20px; font-weight: 700; margin-bottom: 10px; }
+.st-tip { font-size: 13px; color: var(--t2); margin: -4px 0 10px; min-height: 18px; }
+/* Barras: una sola serie, delgadas, punta redondeada arriba y base recta; 2px de aire entre ellas */
+.st-chart { display: flex; align-items: flex-end; gap: 2px; height: 150px; padding-top: 18px; border-bottom: 1px solid var(--hl); }
+.st-col { flex: 1; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; position: relative; cursor: pointer; }
+.st-col i { display: block; width: 100%; max-width: 24px; background: var(--accent); border-radius: 4px 4px 0 0; transition: opacity .15s; }
+.st-col:hover i { opacity: .8; }
+.st-col small { position: absolute; bottom: -20px; font-size: 11px; color: var(--t3); white-space: nowrap; }
+.st-max { position: absolute; top: -2px; font-size: 11px; font-weight: 700; color: var(--white); white-space: nowrap; }
+.st-sec .st-chart { margin-bottom: 26px; }
+.st-row { width: 100%; display: flex; align-items: center; gap: 12px; padding: 7px 0; text-align: left; color: var(--white); }
+.st-n { width: 18px; text-align: center; color: var(--t2); font-weight: 700; }
+.st-img { width: 48px; height: 48px; border-radius: 4px; overflow: hidden; background: var(--hl); flex: none; display: flex; align-items: center; justify-content: center; color: var(--t3); }
+.st-img.round { border-radius: 50%; }
+.st-img img { width: 100%; height: 100%; object-fit: cover; }
+.st-txt { flex: 1; min-width: 0; }
+.st-txt b, .st-txt span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.st-txt b { font-size: 15px; font-weight: 600; }
+.st-txt span { font-size: 13px; color: var(--t2); }
+.st-row em, .st-gname em { font-style: normal; font-size: 13px; color: var(--t2); flex: none; }
+.st-genre { width: 100%; display: block; padding: 6px 0; text-align: left; color: var(--white); }
+.st-gname { display: flex; justify-content: space-between; margin-bottom: 6px; }
+.st-gname b { font-size: 15px; font-weight: 600; }
+.st-gbar { height: 8px; background: var(--hl); border-radius: 4px; overflow: hidden; }
+.st-gbar i { display: block; height: 100%; background: var(--accent); border-radius: 0 4px 4px 0; }
+.st-two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 28px; }
+.st-card b { display: block; font-size: 26px; font-weight: 800; margin-top: 4px; }
+.st-card p { font-size: 13px; color: var(--t2); margin-top: 4px; }
+.st-card .st-chart { height: 70px; margin: 10px 0 20px; gap: 1px; padding-top: 0; }
+.st-card .st-max { display: none; }
+.st-lib { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.st-lib b { display: block; font-size: 22px; font-weight: 800; }

@@ -840,7 +840,7 @@ async function similarSongs(seed) {
 
 // ── Navegación ────────────────────────────────────────────────────────────────
 function viewKey(v) { return `${v.name}:${v.key ?? v.q ?? ''}` }
-function viewKind(v) { return v.name === 'home' || v.name === 'lyrics' || v.name === 'search' ? v.name : 'collection' }
+function viewKind(v) { return v.name === 'home' || v.name === 'lyrics' || v.name === 'search' || v.name === 'stats' ? v.name : 'collection' }
 
 function navigate(v) {
   if (viewKey(v) === viewKey(view)) return
@@ -866,7 +866,7 @@ function goForward() {
 
 function renderView() {
   const kind = viewKind(view)
-  for (const k of ['home', 'search', 'collection', 'lyrics']) $('view-' + k).hidden = k !== kind
+  for (const k of ['home', 'search', 'collection', 'lyrics', 'stats']) $('view-' + k).hidden = k !== kind
   $('btn-home').classList.toggle('active', kind === 'home')
   $('btn-lyrics').classList.toggle('active', kind === 'lyrics')
   $('btn-back').disabled = !histBack.length
@@ -882,6 +882,7 @@ function renderView() {
   if (kind === 'home') buildHome()
   else if (kind === 'search') buildSearch()
   else if (kind === 'collection') openCollection()
+  else if (kind === 'stats') buildStats()
   else { curLyric = -1; syncLyrics(audio.currentTime, true) }
   markSidebar()
 }
@@ -1123,6 +1124,7 @@ function buildHome() {
   const bySize = (a, b) => b.songs.length - a.songs.length
   const recentAlbums = [...new Set(recents.map(albumKey))].map(k => g.albums.get(k)).filter(Boolean)
   fillShelf('home-mixes', dailyMixes())
+  fillHomeStats()
   fillShelf('home-recent-albums', recentAlbums.slice(0, 12))
   fillGenreShelves()
   fillShelf('home-artists', g.artistList.filter(a => a.name !== 'Artista desconocido').sort(bySize).slice(0, 12))
@@ -2082,6 +2084,183 @@ function countPlay(song) {
   if (playLog.length > 600) playLog = playLog.slice(-600)
   save('plays', plays)
   save('playLog', playLog)
+}
+
+// ── Estadísticas: cada escucha con lo que de verdad sonó ──────────────────────
+// listens = [[ruta, cuándo empezó, segundos]]; cuenta a partir de 30 s, como Spotify. Las escuchas
+// de antes de que existiera esto salen del historial (playLog), con la duración de la canción.
+let listens = load('listens', null)
+if (!listens) { listens = playLog.map(([p, ts]) => [p, ts, 0]); save('listens', listens) }
+{ const old = Date.now() - 3 * 365 * 864e5; if (listens.length && listens[0][1] < old) listens = listens.filter(l => l[1] >= old) }
+let listenCur = null, listenSaved = 0
+function saveListens() { listenSaved = Date.now(); save('listens', listens) }
+function trackListen() {
+  if (!currentSong || audio.paused || seeking) return
+  const t = audio.currentTime
+  // Otra canción, o la misma desde el principio (repetir): escucha nueva
+  if (!listenCur || listenCur.path !== currentSong.path || (t < 3 && listenCur.lastT > t + 5))
+    listenCur = { path: currentSong.path, idx: -1, secs: 0, lastT: t }
+  const d = t - listenCur.lastT
+  listenCur.lastT = t
+  if (d <= 0 || d > 10) return   // (adelantar o regresar no cuenta)
+  listenCur.secs += d
+  if (listenCur.idx < 0 && listenCur.secs >= 30)
+    listenCur.idx = listens.push([listenCur.path, Date.now() - Math.round(listenCur.secs * 1000), 30]) - 1
+  if (listenCur.idx < 0) return
+  listens[listenCur.idx][2] = Math.round(listenCur.secs)
+  if (Date.now() - listenSaved > 15000) saveListens()
+}
+audio.addEventListener('timeupdate', trackListen)
+audio.addEventListener('seeked', () => { if (listenCur) listenCur.lastT = audio.currentTime })
+audio.addEventListener('pause', saveListens)
+document.addEventListener('visibilitychange', () => { if (document.hidden) saveListens() })
+
+const DAY_MS = 864e5
+const dayId = t => new Date(t).toLocaleDateString('en-CA')
+function statsData(period) {
+  const now = Date.now()
+  const since = period === 'week' ? now - 7 * DAY_MS : period === 'month' ? now - 30 * DAY_MS : 0
+  const gg = getGenreGroups(), genreOf = new Map()
+  for (const g of gg.genres) for (const s of g.songs) if (!genreOf.has(s.path)) genreOf.set(s.path, g)
+  const rows = []
+  for (const [p, ts, secs] of listens) {
+    if (ts < since) continue
+    const song = songByPath.get(p)
+    if (song) rows.push({ song, ts, secs: secs || Math.min(song.duration || 180, 600) })
+  }
+  const bySong = new Map(), byArtist = new Map(), byGenre = new Map(), hours = Array(24).fill(0)
+  let total = 0
+  for (const r of rows) {
+    total += r.secs
+    hours[new Date(r.ts).getHours()] += r.secs
+    const s = bySong.get(r.song.path) || bySong.set(r.song.path, { song: r.song, n: 0, secs: 0 }).get(r.song.path)
+    s.n++; s.secs += r.secs
+    for (const name of splitArtists(r.song.artist).slice(0, 2)) {
+      const k = name.toLowerCase()
+      const a = byArtist.get(k) || byArtist.set(k, { key: k, name, n: 0, secs: 0, songs: [] }).get(k)
+      a.n++; a.secs += r.secs
+      if (!a.songs.includes(r.song)) a.songs.push(r.song)
+    }
+    const g = genreOf.get(r.song.path)
+    if (g) { const x = byGenre.get(g.key) || byGenre.set(g.key, { g, secs: 0 }).get(g.key); x.secs += r.secs }
+  }
+  // Barras: por día (semana / mes) o por mes (siempre)
+  const bars = []
+  if (period === 'all') {
+    const d = new Date(now)
+    for (let i = 11; i >= 0; i--) {
+      const m = new Date(d.getFullYear(), d.getMonth() - i, 1)
+      bars.push({ key: m.getFullYear() + '-' + m.getMonth(), label: m.toLocaleDateString('es-MX', { month: 'short' }).replace('.', ''),
+        tip: m.toLocaleDateString('es-MX', { month: 'long', year: 'numeric' }), secs: 0 })
+    }
+    for (const r of rows) { const t = new Date(r.ts), b = bars.find(x => x.key === t.getFullYear() + '-' + t.getMonth()); if (b) b.secs += r.secs }
+  } else {
+    const n = period === 'week' ? 7 : 30
+    for (let i = n - 1; i >= 0; i--) {
+      const t = now - i * DAY_MS
+      bars.push({ key: dayId(t), label: n === 7 ? new Date(t).toLocaleDateString('es-MX', { weekday: 'short' }).replace('.', '') : (i % 5 === 0 ? String(new Date(t).getDate()) : ''),
+        tip: new Date(t).toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'short' }), secs: 0 })
+    }
+    for (const r of rows) { const b = bars.find(x => x.key === dayId(r.ts)); if (b) b.secs += r.secs }
+  }
+  // Racha: días seguidos escuchando (hasta hoy, o hasta ayer si hoy todavía no)
+  const days = new Set(listens.map(l => dayId(l[1])))
+  let streak = 0
+  for (let t = days.has(dayId(now)) ? now : now - DAY_MS; days.has(dayId(t)); t -= DAY_MS) streak++
+  const topHour = hours.some(Boolean) ? hours.indexOf(Math.max(...hours)) : -1
+  return {
+    total, listens: rows.length, songs: bySong.size, artists: byArtist.size, bars, hours, topHour, streak,
+    topSongs: [...bySong.values()].sort((a, b) => b.n - a.n || b.secs - a.secs).slice(0, 5),
+    topArtists: [...byArtist.values()].sort((a, b) => b.secs - a.secs).slice(0, 5),
+    topGenres: [...byGenre.values()].sort((a, b) => b.secs - a.secs).slice(0, 5),
+  }
+}
+const fmtMin = s => Math.round(s / 60).toLocaleString('es-MX')
+const hourText = h => new Date(2000, 0, 1, h).toLocaleTimeString('es-MX', { hour: 'numeric', hour12: true }).replace(/\s?([ap])\.?\s?m\.?/i, ' $1. m.')
+
+let statsPeriod = 'week'
+function barChart(bars, tipOf) {
+  const max = Math.max(...bars.map(b => b.secs), 1)
+  const top = bars.findIndex(b => b.secs === max && max > 1)
+  return '<div class="st-chart">' + bars.map((b, i) =>
+    `<div class="st-col" data-tip="${esc(tipOf(b))}">` +
+      (i === top ? `<span class="st-max">${fmtMin(b.secs)}</span>` : '') +
+      `<i style="height:${b.secs ? Math.max(3, b.secs / max * 100) : 0}%"></i><small>${esc(b.label || '')}</small></div>`).join('') +
+    '</div>'
+}
+function buildStats() {
+  const d = statsData(statsPeriod), g = getGroups(), gg = getGenreGroups()
+  const name = { week: 'esta semana', month: 'este mes', all: 'desde siempre' }[statsPeriod]
+  const coverOf = songs => songs.find(s => s.cover)?.cover
+  const img = (src, round) => `<div class="st-img${round ? ' round' : ''}">${src ? `<img src="${src}" alt="">` : svg(round ? I.person : I.note)}</div>`
+  const libHours = Math.round(allSongs.reduce((a, s) => a + (s.duration || 0), 0) / 3600)
+  const empty = !d.listens
+  $('stats').innerHTML = `
+    <h1 class="st-title">Tus estadísticas</h1>
+    <div class="st-chips">${[['week', 'Semana'], ['month', 'Mes'], ['all', 'Siempre']]
+      .map(([k, l]) => `<button class="chip${k === statsPeriod ? ' active' : ''}" data-period="${k}">${l}</button>`).join('')}</div>
+    <div class="st-hero">
+      <div><b>${fmtMin(d.total)}</b><span>minutos escuchados ${name}</span></div>
+      <div><b>${d.songs}</b><span>${d.songs === 1 ? 'canción' : 'canciones'}</span></div>
+      <div><b>${d.artists}</b><span>${d.artists === 1 ? 'artista' : 'artistas'}</span></div>
+    </div>
+    ${empty ? '<p class="st-empty">Todavía no hay escuchas en este periodo. Cada canción cuenta cuando la oyes 30 segundos.</p>' : `
+    <section class="st-sec">
+      <h2>Minutos por ${statsPeriod === 'all' ? 'mes' : 'día'}</h2>
+      <p class="st-tip" id="st-tip">Toca una barra para ver sus minutos</p>
+      ${barChart(d.bars, b => `${b.tip}: ${fmtMin(b.secs)} min`)}
+    </section>
+    <section class="st-sec">
+      <h2>Tus canciones más escuchadas</h2>
+      ${d.topSongs.map((x, i) => `<button class="st-row" data-play="${esc(x.song.path)}"><span class="st-n">${i + 1}</span>${img(x.song.cover)}
+        <div class="st-txt"><b>${esc(x.song.title)}</b><span>${esc(x.song.artist || '')}</span></div><em>${x.n} ${x.n === 1 ? 'vez' : 'veces'}</em></button>`).join('')}
+    </section>
+    <section class="st-sec">
+      <h2>Tus artistas</h2>
+      ${d.topArtists.map((x, i) => `<button class="st-row" data-artist-go="${esc(x.key)}"><span class="st-n">${i + 1}</span>${img(coverOf(x.songs), true)}
+        <div class="st-txt"><b>${esc(x.name)}</b><span>${x.n} ${x.n === 1 ? 'escucha' : 'escuchas'}</span></div><em>${fmtMin(x.secs)} min</em></button>`).join('')}
+    </section>
+    ${d.topGenres.length ? `<section class="st-sec">
+      <h2>Tus géneros</h2>
+      ${d.topGenres.map(x => `<button class="st-genre" data-genre-go="${esc(x.g.key)}"><div class="st-gname"><b>${esc(x.g.name)}</b><em>${Math.round(x.secs / d.total * 100)}%</em></div>
+        <div class="st-gbar"><i style="width:${Math.max(2, x.secs / d.topGenres[0].secs * 100)}%"></i></div></button>`).join('')}
+    </section>` : ''}
+    <section class="st-two">
+      <div class="st-card"><span>Tu hora favorita</span><b>${d.topHour >= 0 ? hourText(d.topHour) : '—'}</b>
+        ${barChart(d.hours.map((s, h) => ({ secs: s, label: ['12 a.m.', '6 a.m.', '12 p.m.', '6 p.m.'][h / 6] || '', tip: hourText(h) })), b => `${b.tip}: ${fmtMin(b.secs)} min`)}</div>
+      <div class="st-card"><span>Racha</span><b>${d.streak} ${d.streak === 1 ? 'día' : 'días'}</b><p>seguidos escuchando música</p></div>
+    </section>`}
+    <section class="st-sec">
+      <h2>Tu biblioteca</h2>
+      <div class="st-lib">
+        ${[[allSongs.length.toLocaleString('es-MX'), 'canciones'], [libHours.toLocaleString('es-MX'), 'horas de música'], [g.artistList.length.toLocaleString('es-MX'), 'artistas'],
+          [g.albumList.length.toLocaleString('es-MX'), 'álbumes'], [g.folderList.length, 'carpetas'], [gg.genres.length, 'géneros']]
+          .map(([n, l]) => `<div><b>${n}</b><span>${l}</span></div>`).join('')}
+      </div>
+    </section>`
+}
+$('stats').addEventListener('click', e => {
+  const per = e.target.closest('[data-period]')
+  if (per) { statsPeriod = per.dataset.period; buildStats(); return }
+  const col = e.target.closest('.st-col')
+  if (col) { const tip = col.closest('.st-sec, .st-card').querySelector('.st-tip'); if (tip) tip.textContent = col.dataset.tip; else col.closest('.st-card').querySelector('b').title = col.dataset.tip; return }
+  const play = e.target.closest('[data-play]')
+  if (play) { const s = songByPath.get(play.dataset.play); if (s) playList(allSongs, allSongs.indexOf(s), SONGS_CTX); return }
+  const ar = e.target.closest('[data-artist-go]')
+  if (ar) { navigate({ name: 'artist', key: ar.dataset.artistGo }); return }
+  const ge = e.target.closest('[data-genre-go]')
+  if (ge) navigate({ name: 'genre', key: ge.dataset.genreGo })
+})
+// Pasar el dedo / el mouse por las barras enseña sus minutos
+$('stats').addEventListener('pointerover', e => {
+  const col = e.target.closest('.st-col'), tip = col?.closest('.st-sec')?.querySelector('.st-tip')
+  if (col && tip) tip.textContent = col.dataset.tip
+})
+$('home-stats').addEventListener('click', () => navigate({ name: 'stats' }))
+function fillHomeStats() {
+  const d = statsData('week')
+  $('home-stats').innerHTML = `<div class="sc-num"><b>${fmtMin(d.total)}</b><span>min esta semana</span></div>
+    <div class="sc-txt">${d.topArtists[0] ? `Tu artista #1: <b>${esc(d.topArtists[0].name)}</b>` : 'Tus canciones, artistas y géneros'}<span>Ver tus estadísticas</span></div>`
 }
 
 // Qué tanto la escuchas últimamente (las escuchas viejas pesan menos)
