@@ -76,6 +76,17 @@ const audio    = $('audio')
 const audioCtx = new AudioContext()
 const analyser = audioCtx.createAnalyser()
 const gainNode = audioCtx.createGain()
+// Sin música ni voz del DJ, el audio de la app se apaga a los 5 s (seguía procesando silencio y
+// gastaba batería); vuelve en cuanto algo suena
+let ctxIdle = 0
+function audioIdleCheck() {
+  clearTimeout(ctxIdle)
+  ctxIdle = setTimeout(() => {
+    if (audio.paused && !dj.speaking && !dj.thinking && audioCtx.state === 'running') audioCtx.suspend()
+  }, 5000)
+}
+audio.addEventListener('pause', audioIdleCheck)
+audio.addEventListener('play', () => { clearTimeout(ctxIdle); if (audioCtx.state === 'suspended') audioCtx.resume() })
 const srcNode  = audioCtx.createMediaElementSource(audio)
 
 analyser.fftSize = 2048
@@ -1979,8 +1990,19 @@ $('np-switch').addEventListener('click', () => {
   canvasBtn()
 })
 
+// Si en 20 s el video no arrancó (YouTube lo bloquea, p. ej. con VPN), se quita: el reproductor de
+// YouTube seguía trabajando escondido y gastaba batería
+let canvasGiveUp = 0
+document.addEventListener('visibilitychange', () => {
+  if (!canvasState.frame) return
+  canvasCmd(document.hidden ? 'pauseVideo' : 'playVideo')
+})
 function canvasTry() {
   canvasClear()
+  clearTimeout(canvasGiveUp)
+  canvasGiveUp = setTimeout(() => {
+    if (canvasState.frame && !canvasBox.classList.contains('on') && !document.hidden) { canvasClear(); canvasState.ids = []; canvasBtn() }
+  }, 20000)
   const id = canvasState.ids[canvasState.i]
   if (!id) { canvasState.ids = []; canvasBtn(); return }   // ninguno se dejó poner
   const f = document.createElement('iframe')
@@ -4002,8 +4024,10 @@ function rafLoop() {
       syncLyrics(audio.currentTime)
     }
   }
+  // 10 veces por segundo basta para la barra y la letra; antes era en cada cuadro de la pantalla
+  // (120 veces por segundo a 120 Hz) y la app redibujaba sin parar: gastaba mucha batería
   if (!audio.paused && !audio.ended) {
-    seekRafId = requestAnimationFrame(rafLoop)
+    seekRafId = setTimeout(rafLoop, 100)
   } else {
     seekRafId = null
   }
@@ -4432,6 +4456,7 @@ document.addEventListener('keydown', e => {
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 setPlayState(false)
+audioIdleCheck()
 applyVolume()
 updateLikeButtons()
 setCover(null)
