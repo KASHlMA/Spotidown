@@ -6,6 +6,8 @@ const WebSocket = require('ws')
 const API        = 'https://generativelanguage.googleapis.com/v1beta/models/'
 const LIVE_URL   = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent'
 const TEXT_MODEL = 'gemini-flash-lite-latest'
+// Si se acaba el límite diario del principal, el texto sigue con éste (la voz no cambia)
+const TEXT_MODELS = [TEXT_MODEL, 'gemini-3.1-flash-lite']
 // Voz de DJ Nat: audio nativo por la API en vivo (sin límite diario en el nivel gratis,
 // aunque Google limita cuántas sesiones se abren por minuto). Los modelos de voz "TTS"
 // sólo dan 10 al día: ya no se usan; si la voz nativa falla, el renderer usa Dalia.
@@ -324,20 +326,26 @@ module.exports = function createGemini(dir) {
   // cupo, el renderer usa frases armadas.
   const BUDGET_PATH = path.join(dir, 'gemini-count.json')
   const today = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' })
-  function spend() {
+  // { day, n: { modelo: usadas }, out: { modelo: true si Google dijo que se acabó } }
+  function readCount() {
     let c
     try { c = JSON.parse(fs.readFileSync(BUDGET_PATH, 'utf8')) } catch { c = {} }
-    if (c.day !== today()) c = { day: today(), n: 0 }
-    c.n++
-    try { fs.writeFileSync(BUDGET_PATH, JSON.stringify(c)) } catch {}
-    return c.n
+    if (c.day !== today()) c = { day: today() }
+    if (typeof c.n !== 'object') c.n = typeof c.n === 'number' ? { [TEXT_MODEL]: c.n } : {}   // formato anterior
+    c.out = c.out || {}
+    return c
   }
-  function used() {
-    try { const c = JSON.parse(fs.readFileSync(BUDGET_PATH, 'utf8')); return c.day === today() ? c.n : 0 } catch { return 0 }
-  }
+  const writeCount = c => { try { fs.writeFileSync(BUDGET_PATH, JSON.stringify(c)) } catch {} }
+  const spend = m => { const c = readCount(); c.n[m] = (c.n[m] || 0) + 1; writeCount(c) }
+  const exhausted = m => { const c = readCount(); c.out[m] = true; writeCount(c) }
+  const used = () => Object.values(readCount().n).reduce((a, b) => a + b, 0)
+
+  // Cada modelo tiene su propio límite de 500 al día: cuando el principal llega al tope (o
+  // Google dice que ya se acabó), sigue el de respaldo. La voz es otro modelo: no cambia.
+  const pick = urgent => TEXT_MODELS.find(m => !readCount().out[m] && (readCount().n[m] || 0) < (urgent ? 480 : 380))
 
   function think(system, prompt, schema, urgent = false) {
-    if (used() >= (urgent ? 480 : 380)) return Promise.reject(new Error('budget'))
+    if (!pick(urgent)) return Promise.reject(new Error('budget'))
     const body = {
       systemInstruction: { parts: [{ text: system }] },
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
@@ -358,17 +366,21 @@ module.exports = function createGemini(dir) {
         fn(v)
       }
       const launch = () => {
+        const model = pick(urgent)
+        if (!model) return finish(reject, new Error('budget'))
         const c = new AbortController()
         ctrls.push(c)
         running++
-        spend()
-        request(TEXT_MODEL, body, settings.key, c.signal).then(j => {
+        spend(model)
+        request(model, body, settings.key, c.signal).then(j => {
           const text = j.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('').trim()
           if (!text) throw new Error('network')
           finish(resolve, schema ? JSON.parse(text) : text)
         }).catch(e => {
           running--
           if (done) return
+          // Se acabó el de este modelo: de una vez con el de respaldo
+          if (e.message === 'quota') { exhausted(model); if (pick(urgent)) return launch() }
           if (e.message === 'quota' || e.message === 'invalid-key') return finish(reject, e)
           if (!hedged && urgent) { hedged = true; launch() }   // falló rápido: el respaldo de una vez
           else if (!hedged) finish(reject, e)
